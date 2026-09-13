@@ -122,6 +122,18 @@ create table if not exists element (
         check (etat in (0, 1, 2))
 );
 
+create index if not exists idx_element_type
+on element(id_type_element);
+
+create index if not exists idx_element_rattachement
+on element(rattachement_sup);
+
+alter table element
+add constraint chk_element_no_self_parent
+check (
+  rattachement_sup is null
+  or rattachement_sup <> id
+);
 
 -- =========================================================
 -- PERSONNE
