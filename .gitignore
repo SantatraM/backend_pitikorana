@@ -1,0 +1,13 @@
+node_modules/
+.env
+.env.*
+!.env.example
+
+# Cloudflare / Wrangler
+.wrangler/
+.dev.vars
+.dev.vars.*
+
+# Logs
+*.log
+npm-debug.log*
