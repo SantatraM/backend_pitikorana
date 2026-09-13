@@ -6,6 +6,7 @@ import languesRoutes from "./routes/langues.routes.js";
 import regionRoutes from "./routes/region.routes.js";
 import villeRoutes from "./routes/villes.routes.js";
 import liensFalimanjakaRoutes from "./routes/liensFalimanjaka.routes.js";
+import typesElementRoutes from "./routes/typesElement.routes.js";
 
 const app = express();
 
@@ -24,5 +25,6 @@ app.use("/api/langues", languesRoutes);
 app.use("/api/regions", regionRoutes);
 app.use("/api/villes", villeRoutes);
 app.use("/api/liens-falimanjaka", liensFalimanjakaRoutes);
+app.use("/api/types-element", typesElementRoutes);
 
 export default app;

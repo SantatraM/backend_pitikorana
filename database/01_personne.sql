@@ -101,17 +101,9 @@ create table if not exists lien_avec_falimanjaka_traduction (
 -- =========================================================
 
 create table if not exists type_element (
-    id uuid primary key default gen_random_uuid()
-);
-
-create table if not exists type_element_traduction (
     id uuid primary key default gen_random_uuid(),
-    id_type_element uuid not null references type_element(id) on delete cascade,
-    id_langue uuid not null references langue(id) on delete cascade,
-    libelle varchar(100) not null,
-    unique(id_type_element, id_langue)
+    libelle varchar(100) not null
 );
-
 
 -- =========================================================
 -- ELEMENT
