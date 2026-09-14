@@ -11,6 +11,9 @@ import elementsRoutes from "./routes/elements.routes.js";
 import sexesRoutes from "./routes/sexes.routes.js";
 import statutsRoutes from "./routes/statuts.routes.js";
 import personnesRoutes from "./routes/personnes.routes.js";
+import contactsPersonneRoutes from "./routes/contactsPersonne.routes.js";
+import typesRelationRoutes from "./routes/typesRelation.routes.js";
+import relationsPersonneRoutes from "./routes/relationsPersonne.routes.js";
 
 const app = express();
 
@@ -34,5 +37,8 @@ app.use("/api/elements", elementsRoutes);
 app.use("/api/sexes", sexesRoutes);
 app.use("/api/statuts", statutsRoutes);
 app.use("/api/personnes", personnesRoutes);
+app.use("/api/contacts-personne", contactsPersonneRoutes);
+app.use("/api/types-relation", typesRelationRoutes);
+app.use("/api/relations-personne", relationsPersonneRoutes);
 
 export default app;

@@ -28,6 +28,15 @@ create table if not exists sexe_traduction (
     unique(id_sexe, id_langue)
 );
 
+ALTER TABLE sexe
+ADD COLUMN code varchar(50);
+
+ALTER TABLE sexe
+ALTER COLUMN code SET NOT NULL;
+
+ALTER TABLE sexe
+ADD CONSTRAINT sexe_code_unique UNIQUE (code);
+
 
 -- =========================================================
 -- STATUT
@@ -217,13 +226,16 @@ create table if not exists contacts_personne (
     lien_facebook text
 );
 
+alter table contacts_personne
+add constraint contacts_personne_id_personne_unique
+unique (id_personne);
 
 -- =========================================================
 -- TYPE RELATION
 -- =========================================================
 
-create table if not exists type_relation (
-    id uuid primary key default gen_random_uuid(),
+create table if not exists type_relation ( --mère,père,enfant,frère et soeur
+    id uuid primary key default gen_random_uuid()
 );
 
 create table if not exists type_relation_traduction (
@@ -234,6 +246,24 @@ create table if not exists type_relation_traduction (
     unique(id_type_relation, id_langue)
 );
 
+ALTER TABLE type_relation
+ADD COLUMN id_inverse_defaut uuid,
+ADD COLUMN id_inverse_masculin uuid,
+ADD COLUMN id_inverse_feminin uuid;
+
+ALTER TABLE type_relation
+ADD CONSTRAINT fk_type_relation_inverse_defaut
+    FOREIGN KEY (id_inverse_defaut)
+    REFERENCES type_relation(id),
+
+ADD CONSTRAINT fk_type_relation_inverse_masculin
+    FOREIGN KEY (id_inverse_masculin)
+    REFERENCES type_relation(id),
+
+ADD CONSTRAINT fk_type_relation_inverse_feminin
+    FOREIGN KEY (id_inverse_feminin)
+    REFERENCES type_relation(id);
+
 
 -- =========================================================
 -- RELATION ENTRE PERSONNES
@@ -241,28 +271,37 @@ create table if not exists type_relation_traduction (
 
 create table if not exists relation_personne (
     id uuid primary key default gen_random_uuid(),
-    id_personne_1 uuid not null references personne(id) on delete cascade,
-    id_personne_2 uuid not null references personne(id) on delete cascade,
-    id_type_relation uuid not null references type_relation(id),
-    unique(
-        id_personne_1,
-        id_personne_2,
-        id_type_relation
-    ),
-    check(id_personne_1 <> id_personne_2)
+    id_personne_source uuid not null
+        references personne(id)
+        on delete cascade,
+    id_personne_cible uuid not null
+        references personne(id)
+        on delete cascade,
+    id_type_relation uuid not null
+        references type_relation(id),
+    constraint relation_personne_source_cible_unique
+        unique (
+            id_personne_source,
+            id_personne_cible
+        ),
+    constraint relation_personne_source_cible_different
+        check (
+            id_personne_source <> id_personne_cible
+        )
+
 );
-
-
 -- =========================================================
 -- PHOTOS PERSONNE
 -- =========================================================
 
 create table if not exists photos_personne (
     id uuid primary key default gen_random_uuid(),
-    id_personne uuid not null references personne(id) on delete cascade,
-    lien_photo text not null,
-    est_principale boolean not null default false,
-    created_at timestamptz not null default now()
+    id_personne uuid not null
+        references personne(id)
+        on delete cascade,
+    chemin_photo text not null,
+    unique (id_personne),
+    unique (chemin_photo)
 );
 
 

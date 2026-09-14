@@ -108,7 +108,6 @@ select
 
     p.adresse,
 
-    -- Géographie
     p.id_ville,
     vv.nom_ville,
     vv.id_region,
@@ -116,24 +115,26 @@ select
     vv.id_pays,
     vv.nom_pays,
 
-    -- Lien Falimanjaka
     p.id_lien,
 
-    -- Élément directement rattaché à la personne
     p.id_element,
     e.nom as nom_element,
     e.id_type_element,
     te.libelle as type_element_libelle,
 
-    -- Hiérarchie généalogique
     veh.id_razambe,
     veh.nom_razambe,
-
     veh.id_taranaka,
     veh.nom_taranaka,
-
     veh.id_sampana,
-    veh.nom_sampana
+    veh.nom_sampana,
+
+    cp.id as id_contact,
+    cp.telephone,
+    cp.whatsapp,
+    cp.email,
+    cp.facebook,
+    cp.lien_facebook
 
 from personne p
 
@@ -147,7 +148,10 @@ left join type_element te
     on te.id = e.id_type_element
 
 left join v_element_hierarchie veh
-    on veh.id_element = p.id_element;
+    on veh.id_element = p.id_element
+
+left join contacts_personne cp
+    on cp.id_personne = p.id;
 
 create or replace view v_personne_langue as
 select

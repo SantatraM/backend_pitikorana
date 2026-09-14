@@ -65,6 +65,16 @@ function mapPersonneRow(row) {
     sampana: row.id_sampana
       ? { id: row.id_sampana, nom: row.nom_sampana }
       : null,
+    contact: row.id_contact
+      ? {
+          id: row.id_contact,
+          telephone: row.telephone ?? null,
+          whatsapp: row.whatsapp ?? null,
+          email: row.email ?? null,
+          facebook: row.facebook ?? null,
+          lien_facebook: row.lien_facebook ?? null,
+        }
+      : null,
   });
 }
 
