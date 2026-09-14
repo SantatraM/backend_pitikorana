@@ -8,7 +8,8 @@ import {
   updateLien,
 } from "../services/lienAvecFalimanjaka.service.js";
 
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 function isUuid(value) {
   return UUID_PATTERN.test(value);
@@ -94,14 +95,18 @@ export async function getLiens(req, res) {
 
 export async function getLien(req, res) {
   if (!isUuid(req.params.id)) {
-    return res.status(400).json({ success: false, message: "Identifiant invalide" });
+    return res
+      .status(400)
+      .json({ success: false, message: "Identifiant invalide" });
   }
 
   try {
     const lien = await getLienById(req.params.id);
 
     if (!lien) {
-      return res.status(404).json({ success: false, message: "Lien introuvable" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Lien introuvable" });
     }
 
     return res.json({ success: true, data: lien });
@@ -138,7 +143,9 @@ export async function addLien(req, res) {
 
 export async function editLien(req, res) {
   if (!isUuid(req.params.id)) {
-    return res.status(400).json({ success: false, message: "Identifiant invalide" });
+    return res
+      .status(400)
+      .json({ success: false, message: "Identifiant invalide" });
   }
 
   try {
@@ -146,7 +153,9 @@ export async function editLien(req, res) {
     const lienModifie = await updateLien(req.params.id, lien);
 
     if (!lienModifie) {
-      return res.status(404).json({ success: false, message: "Lien introuvable" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Lien introuvable" });
     }
 
     return res.json({
@@ -161,14 +170,18 @@ export async function editLien(req, res) {
 
 export async function removeLien(req, res) {
   if (!isUuid(req.params.id)) {
-    return res.status(400).json({ success: false, message: "Identifiant invalide" });
+    return res
+      .status(400)
+      .json({ success: false, message: "Identifiant invalide" });
   }
 
   try {
     const lienSupprime = await deleteLien(req.params.id);
 
     if (!lienSupprime) {
-      return res.status(404).json({ success: false, message: "Lien introuvable" });
+      return res
+        .status(404)
+        .json({ success: false, message: "Lien introuvable" });
     }
 
     return res.json({

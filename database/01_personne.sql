@@ -16,7 +16,7 @@ create table if not exists langue ( --FAIT
 -- SEXE
 -- =========================================================
 
-create table if not exists sexe (
+create table if not exists sexe ( --homme ou femme
     id uuid primary key default gen_random_uuid()
 );
 
@@ -33,7 +33,7 @@ create table if not exists sexe_traduction (
 -- STATUT
 -- =========================================================
 
-create table if not exists statut ( 
+create table if not exists statut ( --vivant ou mort 
     id uuid primary key default gen_random_uuid()
 );
 create table if not exists statut_traduction (
@@ -147,18 +147,61 @@ create table if not exists personne (
     autres_appellations varchar(255),
     id_sexe uuid references sexe(id),
     id_statut uuid references statut(id),
+    -- Naissance
+    date_naissance date,
     annee_naissance smallint
         check (
             annee_naissance is null
             or annee_naissance between 1800 and 2100
         ),
     lieu_naissance varchar(150),
+    -- Décès
+    date_deces date,
+
+    annee_deces smallint
+        check (
+            annee_deces is null
+            or annee_deces between 1800 and 2100
+        ),
     adresse varchar(255),
     id_ville uuid references ville(id),
     id_lien uuid references lien_avec_falimanjaka(id),
-    id_element uuid references element(id)
+    id_element uuid references element(id),
+    -- L'année de décès ne peut pas précéder
+    -- l'année de naissance
+    check (
+        annee_naissance is null
+        or annee_deces is null
+        or annee_deces >= annee_naissance
+    ),
+    -- Si date et année de naissance sont renseignées,
+    -- elles doivent correspondre
+    check (
+        date_naissance is null
+        or annee_naissance is null
+        or extract(year from date_naissance)::smallint = annee_naissance
+    ),
+    -- Même principe pour le décès
+    check (
+        date_deces is null
+        or annee_deces is null
+        or extract(year from date_deces)::smallint = annee_deces
+    ),
+    -- Une date de décès ne peut pas précéder
+    -- une date de naissance
+    check (
+        date_naissance is null
+        or date_deces is null
+        or date_deces >= date_naissance
+    )
 );
 
+create index if not exists idx_personne_sexe on personne(id_sexe);
+create index if not exists idx_personne_statut on personne(id_statut);
+create index if not exists idx_personne_ville on personne(id_ville);
+create index if not exists idx_personne_lien on personne(id_lien);
+create index if not exists idx_personne_element on personne(id_element);
+create index if not exists idx_personne_nom on personne(nom);
 
 -- =========================================================
 -- CONTACTS PERSONNE

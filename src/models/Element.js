@@ -16,7 +16,9 @@ function normalizeNullableString(value, fieldName, maxLength) {
   }
 
   if (normalized.length > maxLength) {
-    throw new Error(`Le champ ${fieldName} ne doit pas dépasser ${maxLength} caractères`);
+    throw new Error(
+      `Le champ ${fieldName} ne doit pas dépasser ${maxLength} caractères`,
+    );
   }
 
   return normalized;
@@ -51,10 +53,16 @@ export default class Element {
     this.parent = parent;
   }
 
-  get id() { return this._id; }
-  set id(valeur) { this._id = valeur; }
+  get id() {
+    return this._id;
+  }
+  set id(valeur) {
+    this._id = valeur;
+  }
 
-  get id_type_element() { return this._id_type_element; }
+  get id_type_element() {
+    return this._id_type_element;
+  }
   set id_type_element(valeur) {
     if (!valeur || String(valeur).trim() === "") {
       throw new Error("Le type d'élément est obligatoire");
@@ -62,39 +70,67 @@ export default class Element {
     this._id_type_element = valeur;
   }
 
-  get nom() { return this._nom; }
+  get nom() {
+    return this._nom;
+  }
   set nom(valeur) {
     if (!valeur || valeur.trim() === "") {
       throw new Error("Le nom de l'élément est obligatoire");
     }
     if (valeur.trim().length > 100) {
-      throw new Error("Le nom de l'élément ne doit pas dépasser 100 caractères");
+      throw new Error(
+        "Le nom de l'élément ne doit pas dépasser 100 caractères",
+      );
     }
     this._nom = valeur.trim();
   }
 
-  get autres_appellations() { return this._autres_appellations; }
+  get autres_appellations() {
+    return this._autres_appellations;
+  }
   set autres_appellations(valeur) {
-    this._autres_appellations = normalizeNullableString(valeur, "autres_appellations", 255);
+    this._autres_appellations = normalizeNullableString(
+      valeur,
+      "autres_appellations",
+      255,
+    );
   }
 
-  get id_sexe() { return this._id_sexe; }
-  set id_sexe(valeur) { this._id_sexe = valeur || null; }
+  get id_sexe() {
+    return this._id_sexe;
+  }
+  set id_sexe(valeur) {
+    this._id_sexe = valeur || null;
+  }
 
-  get nom_conjoint() { return this._nom_conjoint; }
+  get nom_conjoint() {
+    return this._nom_conjoint;
+  }
   set nom_conjoint(valeur) {
     this._nom_conjoint = normalizeNullableString(valeur, "nom_conjoint", 100);
   }
 
-  get ville_origine_conjoint() { return this._ville_origine_conjoint; }
+  get ville_origine_conjoint() {
+    return this._ville_origine_conjoint;
+  }
   set ville_origine_conjoint(valeur) {
-    this._ville_origine_conjoint = normalizeNullableString(valeur, "ville_origine_conjoint", 150);
+    this._ville_origine_conjoint = normalizeNullableString(
+      valeur,
+      "ville_origine_conjoint",
+      150,
+    );
   }
 
-  get rattachement_sup() { return this._rattachement_sup; }
-  set rattachement_sup(valeur) { this._rattachement_sup = valeur || null; }
+  get rattachement_sup() {
+    return this._rattachement_sup;
+  }
+  set rattachement_sup(valeur) {
+    this._rattachement_sup = valeur || null;
+  }
 
-  get etat() { return this._etat; }
+  get etat() {
+    return this._etat;
+  }
   set etat(valeur) {
     if (valeur === null || valeur === undefined || valeur === "") {
       throw new Error("L'état doit être égal à 0, 1 ou 2");
@@ -106,18 +142,29 @@ export default class Element {
     this._etat = normalized;
   }
 
-  get type_element() { return this._type_element; }
+  get type_element() {
+    return this._type_element;
+  }
   set type_element(valeur) {
     if (valeur === null) {
       this._type_element = null;
       return;
     }
-    this._type_element = valeur instanceof TypeElement ? valeur : new TypeElement(valeur);
+    this._type_element =
+      valeur instanceof TypeElement ? valeur : new TypeElement(valeur);
   }
 
-  get sexe() { return this._sexe; }
-  set sexe(valeur) { this._sexe = valeur || null; }
+  get sexe() {
+    return this._sexe;
+  }
+  set sexe(valeur) {
+    this._sexe = valeur || null;
+  }
 
-  get parent() { return this._parent; }
-  set parent(valeur) { this._parent = valeur || null; }
+  get parent() {
+    return this._parent;
+  }
+  set parent(valeur) {
+    this._parent = valeur || null;
+  }
 }

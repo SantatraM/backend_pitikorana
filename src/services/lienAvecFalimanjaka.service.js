@@ -47,7 +47,9 @@ const liensSelect = `
 `;
 
 export async function getAllLiens() {
-  const result = await database.query(`${liensSelect} ORDER BY l.id, langue.code`);
+  const result = await database.query(
+    `${liensSelect} ORDER BY l.id, langue.code`,
+  );
   return rowsToLiens(result.rows);
 }
 
@@ -129,10 +131,9 @@ export async function deleteLien(id) {
       return null;
     }
 
-    await database.query(
-      `DELETE FROM lien_avec_falimanjaka WHERE id = $1`,
-      [id],
-    );
+    await database.query(`DELETE FROM lien_avec_falimanjaka WHERE id = $1`, [
+      id,
+    ]);
 
     return lien;
   });

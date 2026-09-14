@@ -105,24 +105,24 @@ export async function editPays(req, res) {
 }
 
 export async function removePays(req, res) {
-    try {
-        const paysSupprime = await deletePays(req.params.id);
-        if (!paysSupprime) {
-        return res.status(404).json({
-            success: false,
-            message: "Pays introuvable",
-        });
-        }
-        res.json({
-            success: true,
-            message: "Pays supprimé avec succès",
-            data: paysSupprime,
-        });
-    } catch (error) {
-        console.error(error);
-        res.status(500).json({
-            success: false,
-            message: "Erreur serveur",
-        });
+  try {
+    const paysSupprime = await deletePays(req.params.id);
+    if (!paysSupprime) {
+      return res.status(404).json({
+        success: false,
+        message: "Pays introuvable",
+      });
     }
+    res.json({
+      success: true,
+      message: "Pays supprimé avec succès",
+      data: paysSupprime,
+    });
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({
+      success: false,
+      message: "Erreur serveur",
+    });
+  }
 }

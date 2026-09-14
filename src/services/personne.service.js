@@ -1,0 +1,169 @@
+import database from "../config/db.js";
+import Personne from "../models/Personne.js";
+const f =
+  "nom, prenom, nom_usage, autres_appellations, id_sexe, id_statut, date_naissance, annee_naissance, lieu_naissance, date_deces, annee_deces, adresse, id_ville, id_lien, id_element";
+function mapPersonneRow(row) {
+  return new Personne({
+    id: row.id,
+    nom: row.nom,
+    prenom: row.prenom,
+    nom_usage: row.nom_usage,
+    autres_appellations: row.autres_appellations,
+    date_naissance: row.date_naissance,
+    date_deces: row.date_deces,
+    annee_naissance: row.annee_naissance,
+    annee_deces: row.annee_deces,
+    lieu_naissance: row.lieu_naissance,
+    adresse: row.adresse,
+    id_sexe: row.id_sexe,
+    id_statut: row.id_statut,
+    id_ville: row.id_ville,
+    id_lien: row.id_lien,
+    id_element: row.id_element,
+    sexe: row.id_sexe
+      ? { id: row.id_sexe, libelle: row.sexe_libelle }
+      : null,
+    statut: row.id_statut
+      ? { id: row.id_statut, libelle: row.statut_libelle }
+      : null,
+    lien: row.id_lien
+      ? { id: row.id_lien, libelle: row.lien_libelle }
+      : null,
+    ville: row.id_ville
+      ? {
+          id: row.id_ville,
+          nom: row.nom_ville,
+          region: row.id_region
+            ? {
+                id: row.id_region,
+                nom: row.nom_region,
+                pays: row.id_pays
+                  ? { id: row.id_pays, nom: row.nom_pays }
+                  : null,
+              }
+            : null,
+        }
+      : null,
+    element: row.id_element
+      ? {
+          id: row.id_element,
+          nom: row.nom_element,
+          type_element: row.id_type_element
+            ? {
+                id: row.id_type_element,
+                libelle: row.type_element_libelle,
+              }
+            : null,
+        }
+      : null,
+    razambe: row.id_razambe
+      ? { id: row.id_razambe, nom: row.nom_razambe }
+      : null,
+    taranaka: row.id_taranaka
+      ? { id: row.id_taranaka, nom: row.nom_taranaka }
+      : null,
+    sampana: row.id_sampana
+      ? { id: row.id_sampana, nom: row.nom_sampana }
+      : null,
+  });
+}
+
+async function getPersonneRawById(id) {
+  const result = await database.query(
+    "SELECT * FROM personne WHERE id=$1",
+    [id],
+  );
+  return result.rows[0] ? new Personne(result.rows[0]) : null;
+}
+
+export const getAllPersonnes = async (lang = "fr") => {
+  const result = await database.query(
+    "SELECT * FROM v_personne_langue WHERE code_langue=$1 ORDER BY nom ASC, prenom ASC",
+    [lang],
+  );
+  return result.rows.map(mapPersonneRow);
+};
+
+export const getPersonneById = async (id, lang = "fr") => {
+  const result = await database.query(
+    "SELECT * FROM v_personne_langue WHERE id=$1 AND code_langue=$2",
+    [id, lang],
+  );
+  return result.rows[0] ? mapPersonneRow(result.rows[0]) : null;
+};
+
+export const getPersonnesByElement = async (id, lang = "fr") => {
+  const result = await database.query(
+    "SELECT * FROM v_personne_langue WHERE id_element=$1 AND code_langue=$2 ORDER BY nom ASC, prenom ASC",
+    [id, lang],
+  );
+  return result.rows.map(mapPersonneRow);
+};
+
+export const getPersonnesByElementDescendants = async (id, lang = "fr") => {
+  const result = await database.query(
+    `WITH RECURSIVE descendants AS (
+      SELECT id FROM element WHERE id = $1
+      UNION ALL
+      SELECT e.id
+      FROM element e
+      JOIN descendants d ON e.rattachement_sup = d.id
+    )
+    SELECT vp.*
+    FROM v_personne_langue vp
+    JOIN descendants d ON d.id = vp.id_element
+    WHERE vp.code_langue = $2
+    ORDER BY vp.nom ASC, vp.prenom ASC`,
+    [id, lang],
+  );
+  return result.rows.map(mapPersonneRow);
+};
+async function check(t, id, n) {
+  if (!id) return;
+  const r = await database.query(`SELECT id FROM ${t} WHERE id=$1`, [id]);
+  if (!r.rows[0]) {
+    const e = new Error(`${n} inexistante`);
+    e.code = "FK";
+    throw e;
+  }
+}
+async function valid(p) {
+  await check("sexe", p.id_sexe, "Sexe");
+  await check("statut", p.id_statut, "Statut");
+  await check("ville", p.id_ville, "Ville");
+  await check("lien_avec_falimanjaka", p.id_lien, "Lien");
+  await check("element", p.id_element, "Élément");
+}
+const vals = (p) => f.split(", ").map((k) => p[k]);
+export async function createPersonne(p, lang = "fr") {
+  await valid(p);
+  const r = await database.query(
+    `INSERT INTO personne (${f}) VALUES (${f
+      .split(", ")
+      .map((_, i) => "$" + (i + 1))
+      .join(",")}) RETURNING id`,
+    vals(p),
+  );
+  return getPersonneById(r.rows[0].id, lang);
+}
+export async function updatePersonne(id, p, lang = "fr") {
+  const old = await getPersonneRawById(id);
+  if (!old) return null;
+
+  const personne = new Personne({ ...old, ...p });
+  await valid(personne);
+  await database.query(
+    `UPDATE personne SET (${f})=(${f
+      .split(", ")
+      .map((_, i) => "$" + (i + 1))
+      .join(",")}) WHERE id=$16`,
+    [...vals(personne), id],
+  );
+  return getPersonneById(id, lang);
+}
+export async function deletePersonne(id) {
+  const p = await getPersonneRawById(id);
+  if (!p) return null;
+  await database.query("DELETE FROM personne WHERE id=$1", [id]);
+  return p;
+}

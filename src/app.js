@@ -8,6 +8,9 @@ import villeRoutes from "./routes/villes.routes.js";
 import liensFalimanjakaRoutes from "./routes/liensFalimanjaka.routes.js";
 import typesElementRoutes from "./routes/typesElement.routes.js";
 import elementsRoutes from "./routes/elements.routes.js";
+import sexesRoutes from "./routes/sexes.routes.js";
+import statutsRoutes from "./routes/statuts.routes.js";
+import personnesRoutes from "./routes/personnes.routes.js";
 
 const app = express();
 
@@ -28,5 +31,8 @@ app.use("/api/villes", villeRoutes);
 app.use("/api/liens-falimanjaka", liensFalimanjakaRoutes);
 app.use("/api/types-element", typesElementRoutes);
 app.use("/api/elements", elementsRoutes);
+app.use("/api/sexes", sexesRoutes);
+app.use("/api/statuts", statutsRoutes);
+app.use("/api/personnes", personnesRoutes);
 
 export default app;
