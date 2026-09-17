@@ -134,7 +134,10 @@ select
     cp.whatsapp,
     cp.email,
     cp.facebook,
-    cp.lien_facebook
+    cp.lien_facebook,
+
+    pp.id as id_photo,
+    pp.chemin_photo
 
 from personne p
 
@@ -151,11 +154,58 @@ left join v_element_hierarchie veh
     on veh.id_element = p.id_element
 
 left join contacts_personne cp
-    on cp.id_personne = p.id;
+    on cp.id_personne = p.id
+
+left join photos_personne pp
+    on pp.id_personne = p.id;
 
 create or replace view v_personne_langue as
 select
-    vp.*,
+    vp.id,
+    vp.nom,
+    vp.prenom,
+    vp.nom_usage,
+    vp.autres_appellations,
+
+    vp.id_sexe,
+    vp.id_statut,
+
+    vp.date_naissance,
+    vp.annee_naissance,
+    vp.lieu_naissance,
+
+    vp.date_deces,
+    vp.annee_deces,
+
+    vp.adresse,
+
+    vp.id_ville,
+    vp.nom_ville,
+    vp.id_region,
+    vp.nom_region,
+    vp.id_pays,
+    vp.nom_pays,
+
+    vp.id_lien,
+
+    vp.id_element,
+    vp.nom_element,
+    vp.id_type_element,
+    vp.type_element_libelle,
+
+    vp.id_razambe,
+    vp.nom_razambe,
+    vp.id_taranaka,
+    vp.nom_taranaka,
+    vp.id_sampana,
+    vp.nom_sampana,
+
+    vp.id_contact,
+    vp.telephone,
+    vp.whatsapp,
+    vp.email,
+    vp.facebook,
+    vp.lien_facebook,
 
     l.id as id_langue,
     l.code as code_langue,
@@ -163,7 +213,10 @@ select
 
     st.libelle as sexe_libelle,
     statut_t.libelle as statut_libelle,
-    lt.libelle as lien_libelle
+    lt.libelle as lien_libelle,
+
+    vp.id_photo,
+    vp.chemin_photo
 
 from v_personne vp
 
@@ -180,3 +233,89 @@ left join statut_traduction statut_t
 left join lien_avec_falimanjaka_traduction lt
     on lt.id_lien = vp.id_lien
     and lt.id_langue = l.id;
+
+-- =========================================================
+-- VUE : ACTIVITÉS D'UNE PERSONNE PAR LANGUE
+-- =========================================================
+
+create or replace view v_personne_activite as
+select
+    pa.id,
+    pa.id_personne,
+    pa.id_activite,
+    a.id_domaine_activite,
+
+    at.id_langue,
+    l.code as code_langue,
+    at.libelle as activite,
+
+    dat.libelle as domaine_activite,
+
+    pa.lieu_travail,
+    pa.etude_en_cours,
+    pa.formations,
+    pa.experience_anterieur,
+    pa.diplome_ou_apprentissage
+
+from personne_activite pa
+
+join activite a
+    on a.id = pa.id_activite
+
+join activite_traduction at
+    on at.id_activite = a.id
+
+join langue l
+    on l.id = at.id_langue
+
+left join domaine_activite da
+    on da.id = a.id_domaine_activite
+
+left join domaine_activite_traduction dat
+    on dat.id_domaine_activite = da.id
+    and dat.id_langue = at.id_langue;
+
+-- =========================================================
+-- VUE : COMPÉTENCES D'UNE PERSONNE PAR LANGUE
+-- =========================================================
+
+create or replace view v_competence_personne as
+select
+    pc.id,
+    pc.id_personne,
+    pc.id_competence,
+
+    ct.id_langue,
+    l.code as code_langue,
+    ct.libelle as competence,
+
+    pc.partageable
+
+from personne_competence pc
+
+join competence c
+    on c.id = pc.id_competence
+
+join competence_traduction ct
+    on ct.id_competence = c.id
+
+join langue l
+    on l.id = ct.id_langue;
+
+-- =========================================================
+-- VUE : CENTRES D'INTÉRÊT D'UNE PERSONNE PAR LANGUE
+-- =========================================================
+
+create or replace view v_centre_interet_personne as
+select
+    pci.id,
+    pci.id_personne,
+    pci.id_centre_interet,
+    cit.id_langue,
+    l.code as code_langue,
+    cit.libelle as centre_interet
+from personne_centre_interet pci
+join centre_interet ci on ci.id = pci.id_centre_interet
+join centre_interet_traduction cit
+    on cit.id_centre_interet = ci.id
+join langue l on l.id = cit.id_langue;

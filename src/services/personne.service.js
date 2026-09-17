@@ -1,5 +1,6 @@
 import database from "../config/db.js";
 import Personne from "../models/Personne.js";
+import { deleteStorageObject, publicStorageUrl } from "./storage.service.js";
 const f =
   "nom, prenom, nom_usage, autres_appellations, id_sexe, id_statut, date_naissance, annee_naissance, lieu_naissance, date_deces, annee_deces, adresse, id_ville, id_lien, id_element";
 function mapPersonneRow(row) {
@@ -73,6 +74,13 @@ function mapPersonneRow(row) {
           email: row.email ?? null,
           facebook: row.facebook ?? null,
           lien_facebook: row.lien_facebook ?? null,
+        }
+      : null,
+    photo: row.id_photo
+      ? {
+          id: row.id_photo,
+          chemin_photo: row.chemin_photo,
+          url_photo: publicStorageUrl("photos_personne", row.chemin_photo),
         }
       : null,
   });
@@ -172,8 +180,44 @@ export async function updatePersonne(id, p, lang = "fr") {
   return getPersonneById(id, lang);
 }
 export async function deletePersonne(id) {
-  const p = await getPersonneRawById(id);
-  if (!p) return null;
-  await database.query("DELETE FROM personne WHERE id=$1", [id]);
-  return p;
+  const deletion = await database.transaction(async () => {
+    const personne = await getPersonneRawById(id);
+    if (!personne) return null;
+
+    // Verrouille la photo éventuelle : un remplacement concurrent ne peut pas
+    // changer son chemin entre la lecture et le cascade PostgreSQL.
+    const photoResult = await database.query(
+      `SELECT id, id_personne, chemin_photo
+      FROM photos_personne
+      WHERE id_personne = $1
+      FOR UPDATE`,
+      [id],
+    );
+
+    await database.query("DELETE FROM personne WHERE id=$1", [id]);
+
+    return {
+      personne,
+      cheminPhoto: photoResult.rows[0]?.chemin_photo ?? null,
+    };
+  });
+
+  if (!deletion) return null;
+
+  if (deletion.cheminPhoto) {
+    try {
+      await deleteStorageObject("photos_personne", deletion.cheminPhoto, {
+        allowNotFound: true,
+      });
+    } catch (error) {
+      // La suppression PostgreSQL est déjà validée : ne jamais la présenter
+      // comme un échec ni tenter de restaurer la personne.
+      console.error(
+        `Personne supprimée, nettoyage Storage impossible pour ${deletion.cheminPhoto}`,
+        error.code ?? "STORAGE_DELETE_FAILED",
+      );
+    }
+  }
+
+  return deletion.personne;
 }

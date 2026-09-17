@@ -14,6 +14,14 @@ import personnesRoutes from "./routes/personnes.routes.js";
 import contactsPersonneRoutes from "./routes/contactsPersonne.routes.js";
 import typesRelationRoutes from "./routes/typesRelation.routes.js";
 import relationsPersonneRoutes from "./routes/relationsPersonne.routes.js";
+import photosPersonneRoutes from "./routes/photosPersonne.routes.js";
+import domainesActiviteRoutes from "./routes/domainesActivite.routes.js";
+import activitesRoutes from "./routes/activites.routes.js";
+import personnesActivitesRoutes from "./routes/personnesActivites.routes.js";
+import competencesRoutes from "./routes/competences.routes.js";
+import personnesCompetencesRoutes from "./routes/personnesCompetences.routes.js";
+import centresInteretRoutes from "./routes/centresInteret.routes.js";
+import personnesCentresInteretRoutes from "./routes/personnesCentresInteret.routes.js";
 
 const app = express();
 
@@ -40,5 +48,13 @@ app.use("/api/personnes", personnesRoutes);
 app.use("/api/contacts-personne", contactsPersonneRoutes);
 app.use("/api/types-relation", typesRelationRoutes);
 app.use("/api/relations-personne", relationsPersonneRoutes);
+app.use("/api/photos-personne", photosPersonneRoutes);
+app.use("/api/domaines-activite", domainesActiviteRoutes);
+app.use("/api/activites", activitesRoutes);
+app.use("/api/personnes-activites", personnesActivitesRoutes);
+app.use("/api/competences", competencesRoutes);
+app.use("/api/personnes-competences", personnesCompetencesRoutes);
+app.use("/api/centres-interet", centresInteretRoutes);
+app.use("/api/personnes-centres-interet", personnesCentresInteretRoutes);
 
 export default app;

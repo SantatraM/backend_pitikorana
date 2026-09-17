@@ -1,0 +1,10 @@
+import express from "express";
+import { add, all, byPerson, edit, one, remove } from "../controllers/personneCentreInteret.controller.js";
+const router = express.Router();
+router.get("/personne/:id_personne", byPerson);
+router.get("/:id", one);
+router.get("/", all);
+router.post("/", add);
+router.put("/:id", edit);
+router.delete("/:id", remove);
+export default router;

@@ -365,7 +365,11 @@ create table if not exists personne_activite (
     id uuid primary key default gen_random_uuid(),
     id_personne uuid not null references personne(id) on delete cascade,
     id_activite uuid not null references activite(id),
-    est_actuelle boolean not null default true,
+    lieu_travail varchar,
+    etude_en_cours varchar,
+    formations varchar,
+    experience_anterieur varchar,
+    diplome_ou_apprentissage varchar,
     unique(id_personne, id_activite)
 );
 

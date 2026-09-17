@@ -1,15 +1,18 @@
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "pitikorana-api",
-  "main": "src/worker.js",
-  "compatibility_date": "2026-09-13",
-  "compatibility_flags": [
-    "nodejs_compat"
-  ],
-  "hyperdrive": [
-    {
-      "binding": "HYPERDRIVE",
-      "id": "<HYPERDRIVE_ID>"
-    }
-  ]
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "pitikorana-api",
+	"main": "src/worker.js",
+	"compatibility_date": "2026-09-13",
+	"compatibility_flags": [
+		"nodejs_compat"
+	],
+	"hyperdrive": [
+		{
+			"binding": "HYPERDRIVE",
+			"id": "e1b8311f823647e685ba27cef0fe0e63"
+		}
+	],
+	"images": {
+		"binding": "IMAGES"
+	}
 }

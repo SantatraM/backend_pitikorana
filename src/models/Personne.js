@@ -100,6 +100,7 @@ export default class Personne {
       "taranaka",
       "sampana",
       "contact",
+      "photo",
     ])
     this[k] = d[k] ?? null;
   }
