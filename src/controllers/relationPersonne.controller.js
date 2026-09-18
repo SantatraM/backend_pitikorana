@@ -24,6 +24,18 @@ function invalidId(res) {
 function handleWriteError(error, res) {
   console.error(error);
 
+  const authorizationMessages = {
+    RELATION_CREER_FORBIDDEN: "Vous n'êtes pas autorisé à créer cette relation",
+    RELATION_MODIFIER_FORBIDDEN: "Vous n'êtes pas autorisé à modifier cette relation",
+    RELATION_SUPPRIMER_FORBIDDEN: "Vous n'êtes pas autorisé à supprimer cette relation",
+  };
+  if (authorizationMessages[error.code]) {
+    return res.status(403).json({
+      success: false,
+      message: authorizationMessages[error.code],
+    });
+  }
+
   if (["PERSONNE_NOT_FOUND", "TYPE_RELATION_NOT_FOUND"].includes(error.code)) {
     return res.status(404).json({ success: false, message: error.message });
   }
@@ -44,6 +56,21 @@ function handleWriteError(error, res) {
   }
 
   return res.status(400).json({ success: false, message: error.message });
+}
+
+const SERVER_MANAGED_FIELDS = new Set([
+  "id_compte_createur",
+  "date_creation",
+  "date_modification",
+]);
+
+function hasServerManagedField(body) {
+  return (
+    body &&
+    typeof body === "object" &&
+    !Array.isArray(body) &&
+    Object.keys(body).some((field) => SERVER_MANAGED_FIELDS.has(field))
+  );
 }
 
 export async function getRelationsPersonne(req, res) {
@@ -90,6 +117,12 @@ export async function getRelationPersonne(req, res) {
 }
 
 export async function addRelationPersonne(req, res) {
+  if (hasServerManagedField(req.body)) {
+    return res.status(400).json({
+      success: false,
+      message: "Ces champs sont gérés par le serveur",
+    });
+  }
   try {
     const {
       id_personne_source,
@@ -112,6 +145,7 @@ export async function addRelationPersonne(req, res) {
         id_type_relation,
       }),
       lang,
+      req.auth,
     );
 
     return res.status(201).json({
@@ -128,7 +162,8 @@ export async function removeRelationPersonne(req, res) {
   if (!isUuid(req.params.id)) return invalidId(res);
 
   try {
-    const relation = await deleteRelationPersonne(req.params.id);
+    const lang = req.query.lang || "fr";
+    const relation = await deleteRelationPersonne(req.params.id, req.auth, lang);
     if (!relation) {
       return res
         .status(404)
@@ -146,6 +181,12 @@ export async function removeRelationPersonne(req, res) {
 
 export async function editRelationPersonne(req, res) {
   if (!isUuid(req.params.id)) return invalidId(res);
+  if (hasServerManagedField(req.body)) {
+    return res.status(400).json({
+      success: false,
+      message: "Ces champs sont gérés par le serveur",
+    });
+  }
   if (!isUuid(req.body.id_type_relation)) return invalidId(res);
 
   try {
@@ -154,6 +195,7 @@ export async function editRelationPersonne(req, res) {
       req.params.id,
       req.body.id_type_relation,
       lang,
+      req.auth,
     );
 
     if (!relation) {

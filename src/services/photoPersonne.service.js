@@ -1,9 +1,16 @@
 import database from "../config/db.js";
 import PhotoPersonne from "../models/PhotoPersonne.js";
+import { assertCanManagePersonne } from "./personneAuthorization.service.js";
+import {
+  filterPhotoConfidentielle,
+  filterPhotosConfidentielles,
+  getConfidentialitesByPersonnes,
+} from "./confidentialitePersonne.service.js";
 import { processImage } from "./imageProcessor.service.js";
 import {
+  createSignedStorageUrl,
+  createSignedStorageUrls,
   deleteStorageObject,
-  publicStorageUrl,
   uploadStorageObject,
 } from "./storage.service.js";
 
@@ -19,16 +26,6 @@ function mapPhotoRow(row) {
     id_personne: row.id_personne,
     chemin_photo: row.chemin_photo,
   });
-}
-
-async function validatePersonne(idPersonne) {
-  const result = await database.query(
-    "SELECT id FROM personne WHERE id = $1",
-    [idPersonne],
-  );
-  if (!result.rows[0]) {
-    throw businessError("Personne introuvable", "PERSONNE_NOT_FOUND");
-  }
 }
 
 async function validateUniquePersonPhoto(idPersonne) {
@@ -80,12 +77,57 @@ export async function getAllPhotosPersonne() {
   return result.rows.map(mapPhotoRow);
 }
 
+async function filterPhotoForReader(photo, auth) {
+  const configurations = await getConfidentialitesByPersonnes([
+    photo.id_personne,
+  ]);
+  const visiblePhoto = filterPhotoConfidentielle(
+    photo,
+    configurations[photo.id_personne],
+    auth,
+  );
+  if (!visiblePhoto) return null;
+
+  return {
+    id: visiblePhoto.id,
+    id_personne: visiblePhoto.id_personne,
+    url_photo: await createSignedStorageUrl(
+      "photos_personne",
+      visiblePhoto.chemin_photo,
+    ),
+  };
+}
+
+export async function getAllPhotosPersonneForReader(auth = null) {
+  const visiblePhotos = await filterPhotosConfidentielles(
+    await getAllPhotosPersonne(),
+    auth,
+  );
+  const signedUrls = await createSignedStorageUrls(
+    "photos_personne",
+    visiblePhotos.map((photo) => photo.chemin_photo),
+  );
+
+  return visiblePhotos.map((photo) => ({
+    id: photo.id,
+    id_personne: photo.id_personne,
+    url_photo: signedUrls.get(photo.chemin_photo),
+  }));
+}
+
 export async function getPhotoPersonneById(id) {
   const result = await database.query(
     "SELECT * FROM photos_personne WHERE id = $1",
     [id],
   );
   return result.rows[0] ? mapPhotoRow(result.rows[0]) : null;
+}
+
+// undefined signifie que la photo n'existe pas ; null signifie qu'elle existe
+// mais qu'elle n'est pas visible par le lecteur.
+export async function getPhotoPersonneByIdForReader(id, auth = null) {
+  const photo = await getPhotoPersonneById(id);
+  return photo ? filterPhotoForReader(photo, auth) : undefined;
 }
 
 export async function getPhotoByPersonne(idPersonne) {
@@ -96,8 +138,13 @@ export async function getPhotoByPersonne(idPersonne) {
   return result.rows[0] ? mapPhotoRow(result.rows[0]) : null;
 }
 
-export async function createPhotoPersonne(photo) {
-  await validatePersonne(photo.id_personne);
+export async function getPhotoByPersonneForReader(idPersonne, auth = null) {
+  const photo = await getPhotoByPersonne(idPersonne);
+  return photo ? filterPhotoForReader(photo, auth) : undefined;
+}
+
+export async function createPhotoPersonne(photo, auth) {
+  await assertCanManagePersonne(photo.id_personne, auth);
   await validateUniquePersonPhoto(photo.id_personne);
   await validateUniquePhotoPath(photo.chemin_photo);
 
@@ -122,21 +169,22 @@ async function deleteStorage(path, { allowNotFound = false } = {}) {
   return deleteStorageObject("photos_personne", path, { allowNotFound });
 }
 
-export async function uploadPhotoPersonne(idPersonne, file) {
-  await validatePersonne(idPersonne);
+export async function uploadPhotoPersonne(idPersonne, file, auth) {
+  await assertCanManagePersonne(idPersonne, auth);
   await validateUniquePersonPhoto(idPersonne);
 
   const image = await processImage(file);
   const cheminPhoto = `personnes/${idPersonne}/${crypto.randomUUID()}.webp`;
   let uploadedPath = null;
+  let photo = null;
 
   try {
     await uploadStorage(cheminPhoto, image);
     uploadedPath = cheminPhoto;
-    const photo = await createPhotoPersonne(
+    photo = await createPhotoPersonne(
       new PhotoPersonne({ id_personne: idPersonne, chemin_photo: cheminPhoto }),
+      auth,
     );
-    return { photo, url_photo: publicStorageUrl("photos_personne", cheminPhoto) };
   } catch (error) {
     if (uploadedPath) {
       try {
@@ -147,10 +195,15 @@ export async function uploadPhotoPersonne(idPersonne, file) {
     }
     throw error;
   }
+
+  return {
+    photo,
+    url_photo: await createSignedStorageUrl("photos_personne", cheminPhoto),
+  };
 }
 
-export async function replaceUploadedPhotoPersonne(idPersonne, file) {
-  await validatePersonne(idPersonne);
+export async function replaceUploadedPhotoPersonne(idPersonne, file, auth) {
+  await assertCanManagePersonne(idPersonne, auth);
 
   const existing = await getPhotoByPersonne(idPersonne);
   if (!existing) {
@@ -163,6 +216,7 @@ export async function replaceUploadedPhotoPersonne(idPersonne, file) {
   const image = await processImage(file);
   const nouveauChemin = `personnes/${idPersonne}/${crypto.randomUUID()}.webp`;
   let uploadedPath = null;
+  let photo = null;
 
   try {
     await uploadStorage(nouveauChemin, image);
@@ -183,7 +237,7 @@ export async function replaceUploadedPhotoPersonne(idPersonne, file) {
       );
     }
 
-    const photo = mapPhotoRow(result.rows[0]);
+    photo = mapPhotoRow(result.rows[0]);
 
     try {
       await deleteStorage(existing.chemin_photo);
@@ -191,12 +245,8 @@ export async function replaceUploadedPhotoPersonne(idPersonne, file) {
       console.error("Impossible de nettoyer l'ancienne photo Storage");
     }
 
-    return {
-      photo,
-      url_photo: publicStorageUrl("photos_personne", nouveauChemin),
-    };
   } catch (error) {
-    if (uploadedPath) {
+    if (uploadedPath && !photo) {
       try {
         await deleteStorage(uploadedPath);
       } catch {
@@ -205,13 +255,20 @@ export async function replaceUploadedPhotoPersonne(idPersonne, file) {
     }
     throw error;
   }
+
+  return {
+    photo,
+    url_photo: await createSignedStorageUrl("photos_personne", nouveauChemin),
+  };
 }
 
-export async function updatePhotoPersonne(id, cheminPhoto) {
+export async function updatePhotoPersonne(id, cheminPhoto, auth) {
   const existing = await getPhotoPersonneById(id);
   if (!existing) {
     return null;
   }
+
+  await assertCanManagePersonne(existing.id_personne, auth);
 
   const photo = new PhotoPersonne({
     id: existing.id,
@@ -234,11 +291,13 @@ export async function updatePhotoPersonne(id, cheminPhoto) {
   }
 }
 
-export async function deletePhotoPersonne(id) {
+export async function deletePhotoPersonne(id, auth) {
   const photo = await getPhotoPersonneById(id);
   if (!photo) {
     return null;
   }
+
+  await assertCanManagePersonne(photo.id_personne, auth);
 
   // Le fichier est supprimé avant la référence SQL afin qu'une erreur Storage
   // laisse la ligne disponible pour une nouvelle tentative de suppression.

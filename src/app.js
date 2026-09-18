@@ -22,10 +22,17 @@ import competencesRoutes from "./routes/competences.routes.js";
 import personnesCompetencesRoutes from "./routes/personnesCompetences.routes.js";
 import centresInteretRoutes from "./routes/centresInteret.routes.js";
 import personnesCentresInteretRoutes from "./routes/personnesCentresInteret.routes.js";
+import rolesRoutes from "./routes/roles.routes.js";
+import statutsDemandeInscriptionRoutes from "./routes/statutsDemandeInscription.routes.js";
+import statutsCompteMembreRoutes from "./routes/statutsCompteMembre.routes.js";
+import demandesInscriptionRoutes from "./routes/demandesInscription.routes.js";
+import authRoutes from "./routes/auth.routes.js";
+import initialisationRoutes from "./routes/initialisation.routes.js";
 
 const app = express();
 
-app.use(cors());
+// TODO: restreindre les origines CORS et finaliser la stratégie CSRF avant production.
+app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 
 app.get("/", (req, res) => {
@@ -56,5 +63,14 @@ app.use("/api/competences", competencesRoutes);
 app.use("/api/personnes-competences", personnesCompetencesRoutes);
 app.use("/api/centres-interet", centresInteretRoutes);
 app.use("/api/personnes-centres-interet", personnesCentresInteretRoutes);
+app.use("/api/roles", rolesRoutes);
+app.use(
+  "/api/statuts-demande-inscription",
+  statutsDemandeInscriptionRoutes,
+);
+app.use("/api/statuts-compte-membre", statutsCompteMembreRoutes);
+app.use("/api/demandes-inscription", demandesInscriptionRoutes);
+app.use("/api/auth", authRoutes);
+app.use("/api/initialisation", initialisationRoutes);
 
 export default app;

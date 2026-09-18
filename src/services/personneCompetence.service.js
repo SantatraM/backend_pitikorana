@@ -1,5 +1,6 @@
 import database from "../config/db.js";
 import PersonneCompetence from "../models/PersonneCompetence.js";
+import { assertCanManagePersonne } from "./personneAuthorization.service.js";
 
 const associationFields = ["id_personne", "id_competence", "partageable"];
 
@@ -129,8 +130,8 @@ export async function getCompetencesPartageablesByPersonne(
   return result.rows.map(mapPersonneCompetenceRow);
 }
 
-export async function createPersonneCompetence(association, lang = "fr") {
-  await validatePersonne(association.id_personne);
+export async function createPersonneCompetence(association, lang = "fr", auth) {
+  await assertCanManagePersonne(association.id_personne, auth);
   await validateCompetence(association.id_competence);
   await validateUniqueAssociation(
     association.id_personne,
@@ -146,9 +147,11 @@ export async function createPersonneCompetence(association, lang = "fr") {
   return getPersonneCompetenceById(result.rows[0].id, lang);
 }
 
-export async function updatePersonneCompetence(id, changes, lang = "fr") {
+export async function updatePersonneCompetence(id, changes, lang = "fr", auth) {
   const existing = await getPersonneCompetenceRawById(id);
   if (!existing) return null;
+
+  await assertCanManagePersonne(existing.id_personne, auth);
 
   const association = mergeAssociation(existing, changes);
   await validateCompetence(association.id_competence);
@@ -167,9 +170,11 @@ export async function updatePersonneCompetence(id, changes, lang = "fr") {
   return getPersonneCompetenceById(id, lang);
 }
 
-export async function deletePersonneCompetence(id) {
+export async function deletePersonneCompetence(id, auth) {
   const association = await getPersonneCompetenceRawById(id);
   if (!association) return null;
+
+  await assertCanManagePersonne(association.id_personne, auth);
 
   await database.query("DELETE FROM personne_competence WHERE id = $1", [id]);
   return association;

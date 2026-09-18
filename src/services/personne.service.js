@@ -1,11 +1,37 @@
 import database from "../config/db.js";
 import Personne from "../models/Personne.js";
-import { deleteStorageObject, publicStorageUrl } from "./storage.service.js";
+import {
+  createSignedStorageUrl,
+  createSignedStorageUrls,
+  deleteStorageObject,
+} from "./storage.service.js";
+import { getPersonnesActivitesByPersonne } from "./personneActivite.service.js";
+import { getPersonnesCompetencesByPersonne } from "./personneCompetence.service.js";
+import { getPersonnesCentresInteretByPersonne } from "./personneCentreInteret.service.js";
+import { getRelationsPersonneByPersonne } from "./relationPersonne.service.js";
+import {
+  filterPersonneConfidentiel,
+  filterPersonnesConfidentielles,
+  getConfidentialitesByPersonnes,
+} from "./confidentialitePersonne.service.js";
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function validatePersonneId(id) {
+  if (typeof id !== "string" || !UUID_PATTERN.test(id)) {
+    const error = new Error("Identifiant invalide");
+    error.code = "PERSONNE_ID_INVALID";
+    throw error;
+  }
+}
 const f =
   "nom, prenom, nom_usage, autres_appellations, id_sexe, id_statut, date_naissance, annee_naissance, lieu_naissance, date_deces, annee_deces, adresse, id_ville, id_lien, id_element";
 function mapPersonneRow(row) {
   return new Personne({
     id: row.id,
+    date_creation: row.date_creation,
+    date_modification: row.date_modification,
     nom: row.nom,
     prenom: row.prenom,
     nom_usage: row.nom_usage,
@@ -80,7 +106,6 @@ function mapPersonneRow(row) {
       ? {
           id: row.id_photo,
           chemin_photo: row.chemin_photo,
-          url_photo: publicStorageUrl("photos_personne", row.chemin_photo),
         }
       : null,
   });
@@ -110,6 +135,98 @@ export const getPersonneById = async (id, lang = "fr") => {
   return result.rows[0] ? mapPersonneRow(result.rows[0]) : null;
 };
 
+async function filterPersonneForReader(personne, auth) {
+  if (!personne) return personne;
+
+  const configurations = await getConfidentialitesByPersonnes([personne.id]);
+  const filtered = filterPersonneConfidentiel(
+    personne,
+    configurations[personne.id],
+    auth,
+  );
+  return addSignedUrlToPersonnePhoto(filtered);
+}
+
+async function addSignedUrlToPersonnePhoto(personne) {
+  if (!personne?.photo) return personne;
+
+  const url_photo = await createSignedStorageUrl(
+    "photos_personne",
+    personne.photo.chemin_photo,
+  );
+  return {
+    ...personne,
+    photo: { id: personne.photo.id, url_photo },
+  };
+}
+
+async function addSignedUrlsToPersonnesPhotos(personnes) {
+  const photos = personnes
+    .map((personne) => personne.photo)
+    .filter((photo) => photo !== null);
+  if (photos.length === 0) return personnes;
+
+  const signedUrls = await createSignedStorageUrls(
+    "photos_personne",
+    photos.map((photo) => photo.chemin_photo),
+  );
+  return personnes.map((personne) =>
+    personne.photo
+      ? {
+          ...personne,
+          photo: {
+            id: personne.photo.id,
+            url_photo: signedUrls.get(personne.photo.chemin_photo),
+          },
+        }
+      : personne,
+  );
+}
+
+export async function getAllPersonnesForReader(lang = "fr", auth = null) {
+  return addSignedUrlsToPersonnesPhotos(
+    await filterPersonnesConfidentielles(await getAllPersonnes(lang), auth),
+  );
+}
+
+export async function getPersonneByIdForReader(id, lang = "fr", auth = null) {
+  return filterPersonneForReader(await getPersonneById(id, lang), auth);
+}
+
+export async function getProfilPersonne(id, lang = "fr") {
+  validatePersonneId(id);
+
+  const personne = await getPersonneById(id, lang);
+  if (!personne) {
+    return null;
+  }
+
+  // Séquentiel volontairement : les services existants partagent le client
+  // PostgreSQL isolé par requête dans le runtime Worker.
+  const activites = await getPersonnesActivitesByPersonne(id, lang);
+  const competences = await getPersonnesCompetencesByPersonne(id, lang);
+  const centres_interet = await getPersonnesCentresInteretByPersonne(id, lang);
+  const relations = await getRelationsPersonneByPersonne(id, lang);
+
+  return {
+    personne,
+    activites,
+    competences,
+    centres_interet,
+    relations,
+  };
+}
+
+export async function getProfilPersonneForReader(id, lang = "fr", auth = null) {
+  const profil = await getProfilPersonne(id, lang);
+  if (!profil) return profil;
+
+  return {
+    ...profil,
+    personne: await filterPersonneForReader(profil.personne, auth),
+  };
+}
+
 export const getPersonnesByElement = async (id, lang = "fr") => {
   const result = await database.query(
     "SELECT * FROM v_personne_langue WHERE id_element=$1 AND code_langue=$2 ORDER BY nom ASC, prenom ASC",
@@ -117,6 +234,19 @@ export const getPersonnesByElement = async (id, lang = "fr") => {
   );
   return result.rows.map(mapPersonneRow);
 };
+
+export async function getPersonnesByElementForReader(
+  id,
+  lang = "fr",
+  auth = null,
+) {
+  return addSignedUrlsToPersonnesPhotos(
+    await filterPersonnesConfidentielles(
+      await getPersonnesByElement(id, lang),
+      auth,
+    ),
+  );
+}
 
 export const getPersonnesByElementDescendants = async (id, lang = "fr") => {
   const result = await database.query(
@@ -136,6 +266,19 @@ export const getPersonnesByElementDescendants = async (id, lang = "fr") => {
   );
   return result.rows.map(mapPersonneRow);
 };
+
+export async function getPersonnesByElementDescendantsForReader(
+  id,
+  lang = "fr",
+  auth = null,
+) {
+  return addSignedUrlsToPersonnesPhotos(
+    await filterPersonnesConfidentielles(
+      await getPersonnesByElementDescendants(id, lang),
+      auth,
+    ),
+  );
+}
 async function check(t, id, n) {
   if (!id) return;
   const r = await database.query(`SELECT id FROM ${t} WHERE id=$1`, [id]);
@@ -153,20 +296,42 @@ async function valid(p) {
   await check("element", p.id_element, "Élément");
 }
 const vals = (p) => f.split(", ").map((k) => p[k]);
-export async function createPersonne(p, lang = "fr") {
+function authorizationError() {
+  const error = new Error("Vous n'êtes pas autorisé à modifier cette fiche");
+  error.code = "PERSONNE_UPDATE_FORBIDDEN";
+  return error;
+}
+
+function canUpdatePersonne(personne, auth) {
+  if (auth?.compte?.role === "ADMIN") return true;
+  if (!auth?.compte?.id || !auth?.personne?.id) return false;
+
+  return (
+    personne.id === auth.personne.id ||
+    personne.id_compte_createur === auth.compte.id
+  );
+}
+
+export async function createPersonne(
+  p,
+  lang = "fr",
+  idCompteCreateur = null,
+  auth = null,
+) {
   await valid(p);
   const r = await database.query(
-    `INSERT INTO personne (${f}) VALUES (${f
+    `INSERT INTO personne (${f}, id_compte_createur) VALUES (${f
       .split(", ")
       .map((_, i) => "$" + (i + 1))
-      .join(",")}) RETURNING id`,
-    vals(p),
+      .join(",")}, $16) RETURNING id`,
+    [...vals(p), idCompteCreateur],
   );
-  return getPersonneById(r.rows[0].id, lang);
+  return getPersonneByIdForReader(r.rows[0].id, lang, auth);
 }
-export async function updatePersonne(id, p, lang = "fr") {
+export async function updatePersonne(id, p, lang = "fr", auth = null) {
   const old = await getPersonneRawById(id);
   if (!old) return null;
+  if (!canUpdatePersonne(old, auth)) throw authorizationError();
 
   const personne = new Personne({ ...old, ...p });
   await valid(personne);
@@ -174,10 +339,10 @@ export async function updatePersonne(id, p, lang = "fr") {
     `UPDATE personne SET (${f})=(${f
       .split(", ")
       .map((_, i) => "$" + (i + 1))
-      .join(",")}) WHERE id=$16`,
+      .join(",")}), date_modification = now() WHERE id=$16`,
     [...vals(personne), id],
   );
-  return getPersonneById(id, lang);
+  return getPersonneByIdForReader(id, lang, auth);
 }
 export async function deletePersonne(id) {
   const deletion = await database.transaction(async () => {

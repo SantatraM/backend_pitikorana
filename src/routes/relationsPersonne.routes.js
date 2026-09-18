@@ -7,14 +7,15 @@ import {
   getRelationsPersonneByPersonne,
   removeRelationPersonne,
 } from "../controllers/relationPersonne.controller.js";
+import { requireAuth } from "../middlewares/auth.middleware.js";
 
 const router = express.Router();
 
 router.get("/personne/:id_personne", getRelationsPersonneByPersonne);
 router.get("/:id", getRelationPersonne);
 router.get("/", getRelationsPersonne);
-router.post("/", addRelationPersonne);
-router.put("/:id", editRelationPersonne);
-router.delete("/:id", removeRelationPersonne);
+router.post("/", requireAuth, addRelationPersonne);
+router.put("/:id", requireAuth, editRelationPersonne);
+router.delete("/:id", requireAuth, removeRelationPersonne);
 
 export default router;

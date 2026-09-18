@@ -1,5 +1,6 @@
 import database from "../config/db.js";
 import PersonneActivite from "../models/PersonneActivite.js";
+import { assertCanManagePersonne } from "./personneAuthorization.service.js";
 
 const associationFields = [
   "id_personne",
@@ -132,8 +133,8 @@ export async function getPersonnesActivitesByPersonne(idPersonne, lang = "fr") {
   return result.rows.map(mapPersonneActiviteRow);
 }
 
-export async function createPersonneActivite(association, lang = "fr") {
-  await validatePersonne(association.id_personne);
+export async function createPersonneActivite(association, lang = "fr", auth) {
+  await assertCanManagePersonne(association.id_personne, auth);
   await validateActivite(association.id_activite);
   await validateUniqueAssociation(
     association.id_personne,
@@ -157,9 +158,11 @@ export async function createPersonneActivite(association, lang = "fr") {
   return getPersonneActiviteById(result.rows[0].id, lang);
 }
 
-export async function updatePersonneActivite(id, changes, lang = "fr") {
+export async function updatePersonneActivite(id, changes, lang = "fr", auth) {
   const existing = await getPersonneActiviteRawById(id);
   if (!existing) return null;
+
+  await assertCanManagePersonne(existing.id_personne, auth);
 
   const association = mergeAssociation(existing, changes);
   await validateActivite(association.id_activite);
@@ -193,9 +196,11 @@ export async function updatePersonneActivite(id, changes, lang = "fr") {
   return getPersonneActiviteById(id, lang);
 }
 
-export async function deletePersonneActivite(id) {
+export async function deletePersonneActivite(id, auth) {
   const association = await getPersonneActiviteRawById(id);
   if (!association) return null;
+
+  await assertCanManagePersonne(association.id_personne, auth);
 
   await database.query("DELETE FROM personne_activite WHERE id = $1", [id]);
   return association;

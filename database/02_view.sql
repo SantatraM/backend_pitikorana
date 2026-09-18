@@ -137,7 +137,10 @@ select
     cp.lien_facebook,
 
     pp.id as id_photo,
-    pp.chemin_photo
+    pp.chemin_photo,
+
+    p.date_creation,
+    p.date_modification
 
 from personne p
 
@@ -216,7 +219,10 @@ select
     lt.libelle as lien_libelle,
 
     vp.id_photo,
-    vp.chemin_photo
+    vp.chemin_photo,
+
+    vp.date_creation,
+    vp.date_modification
 
 from v_personne vp
 

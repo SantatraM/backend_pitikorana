@@ -2,9 +2,9 @@ import ContactsPersonne from "../models/ContactsPersonne.js";
 import {
   createContactPersonne,
   deleteContactPersonne,
-  getAllContactsPersonne,
-  getContactPersonneById,
-  getContactByPersonne,
+  getAllContactsPersonneForReader,
+  getContactPersonneByIdForReader,
+  getContactByPersonneForReader,
   updateContactPersonne,
 } from "../services/contactsPersonne.service.js";
 
@@ -23,6 +23,10 @@ function invalidId(res) {
 
 function handleWriteError(error, res) {
   console.error(error);
+
+  if (error.code === "PERSONNE_MANAGEMENT_FORBIDDEN") {
+    return res.status(403).json({ success: false, message: error.message });
+  }
 
   if (error.code === "PERSONNE_NOT_FOUND") {
     return res.status(400).json({ success: false, message: error.message });
@@ -44,7 +48,10 @@ function handleWriteError(error, res) {
 
 export async function getContactsPersonne(req, res) {
   try {
-    return res.json({ success: true, data: await getAllContactsPersonne() });
+    return res.json({
+      success: true,
+      data: await getAllContactsPersonneForReader(req.auth),
+    });
   } catch (error) {
     console.error(error);
     return res.status(500).json({ success: false, message: "Erreur serveur" });
@@ -55,7 +62,10 @@ export async function getContactPersonne(req, res) {
   if (!isUuid(req.params.id)) return invalidId(res);
 
   try {
-    const contact = await getContactPersonneById(req.params.id);
+    const contact = await getContactPersonneByIdForReader(
+      req.params.id,
+      req.auth,
+    );
     if (!contact) {
       return res
         .status(404)
@@ -72,7 +82,10 @@ export async function getContactsPersonneByPersonne(req, res) {
   if (!isUuid(req.params.id_personne)) return invalidId(res);
 
   try {
-    const contact = await getContactByPersonne(req.params.id_personne);
+    const contact = await getContactByPersonneForReader(
+      req.params.id_personne,
+      req.auth,
+    );
     if (!contact) {
       return res
         .status(404)
@@ -90,7 +103,7 @@ export async function addContactPersonne(req, res) {
     if (!isUuid(req.body.id_personne)) return invalidId(res);
 
     const contact = new ContactsPersonne(req.body);
-    const nouveauContact = await createContactPersonne(contact);
+    const nouveauContact = await createContactPersonne(contact, req.auth);
     return res.status(201).json({
       success: true,
       message: "Contact créé avec succès",
@@ -110,7 +123,7 @@ export async function editContactPersonne(req, res) {
     return invalidId(res);
 
   try {
-    const contact = await updateContactPersonne(req.params.id, req.body);
+    const contact = await updateContactPersonne(req.params.id, req.body, req.auth);
     if (!contact) {
       return res
         .status(404)
@@ -130,7 +143,7 @@ export async function removeContactPersonne(req, res) {
   if (!isUuid(req.params.id)) return invalidId(res);
 
   try {
-    const contact = await deleteContactPersonne(req.params.id);
+    const contact = await deleteContactPersonne(req.params.id, req.auth);
     if (!contact) {
       return res
         .status(404)
@@ -142,7 +155,6 @@ export async function removeContactPersonne(req, res) {
       data: contact,
     });
   } catch (error) {
-    console.error(error);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    return handleWriteError(error, res);
   }
 }

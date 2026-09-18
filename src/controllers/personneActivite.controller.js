@@ -24,6 +24,10 @@ function invalidId(res) {
 function handleWriteError(error, res) {
   console.error(error);
 
+  if (error.code === "PERSONNE_MANAGEMENT_FORBIDDEN") {
+    return res.status(403).json({ success: false, message: error.message });
+  }
+
   if (error.code === "PERSONNE_NOT_FOUND" || error.code === "ACTIVITE_NOT_FOUND") {
     return res.status(404).json({ success: false, message: error.message });
   }
@@ -110,7 +114,7 @@ export async function addPersonneActivite(req, res) {
   try {
     const lang = req.query.lang || "fr";
     const association = new PersonneActivite(req.body);
-    const nouvelleAssociation = await createPersonneActivite(association, lang);
+    const nouvelleAssociation = await createPersonneActivite(association, lang, req.auth);
     return res.status(201).json({
       success: true,
       message: "Activité enregistrée avec succès",
@@ -140,7 +144,7 @@ export async function editPersonneActivite(req, res) {
 
   try {
     const lang = req.query.lang || "fr";
-    const association = await updatePersonneActivite(req.params.id, req.body, lang);
+    const association = await updatePersonneActivite(req.params.id, req.body, lang, req.auth);
     if (!association) {
       return res.status(404).json({
         success: false,
@@ -161,7 +165,7 @@ export async function removePersonneActivite(req, res) {
   if (!isUuid(req.params.id)) return invalidId(res);
 
   try {
-    const association = await deletePersonneActivite(req.params.id);
+    const association = await deletePersonneActivite(req.params.id, req.auth);
     if (!association) {
       return res.status(404).json({
         success: false,
@@ -174,7 +178,6 @@ export async function removePersonneActivite(req, res) {
       data: association,
     });
   } catch (error) {
-    console.error(error);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    return handleWriteError(error, res);
   }
 }

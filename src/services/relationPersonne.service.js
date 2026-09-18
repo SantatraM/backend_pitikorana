@@ -58,6 +58,7 @@ async function getPersonneForRelation(id) {
     `SELECT
       p.id,
       p.id_sexe,
+      p.id_compte_createur,
       s.code AS code_sexe
     FROM personne p
     LEFT JOIN sexe s ON s.id = p.id_sexe
@@ -124,7 +125,8 @@ async function relationExists(sourceId, cibleId) {
 
 async function getRelationRawById(id) {
   const result = await database.query(
-    `SELECT id, id_personne_source, id_personne_cible, id_type_relation
+    `SELECT id, id_personne_source, id_personne_cible, id_type_relation,
+      id_compte_createur
     FROM relation_personne
     WHERE id = $1`,
     [id],
@@ -135,13 +137,15 @@ async function getRelationRawById(id) {
         id_personne_source: result.rows[0].id_personne_source,
         id_personne_cible: result.rows[0].id_personne_cible,
         id_type_relation: result.rows[0].id_type_relation,
+        id_compte_createur: result.rows[0].id_compte_createur,
       })
     : null;
 }
 
 async function getInverseRelationRaw(sourceId, cibleId, typeId) {
   const result = await database.query(
-    `SELECT id, id_personne_source, id_personne_cible, id_type_relation
+    `SELECT id, id_personne_source, id_personne_cible, id_type_relation,
+      id_compte_createur
     FROM relation_personne
     WHERE id_personne_source = $1
       AND id_personne_cible = $2
@@ -155,6 +159,7 @@ async function getInverseRelationRaw(sourceId, cibleId, typeId) {
         id_personne_source: result.rows[0].id_personne_source,
         id_personne_cible: result.rows[0].id_personne_cible,
         id_type_relation: result.rows[0].id_type_relation,
+        id_compte_createur: result.rows[0].id_compte_createur,
       })
     : null;
 }
@@ -183,7 +188,31 @@ export async function getRelationsPersonneByPersonne(id, lang = "fr") {
   return result.rows.map(mapRelationRow);
 }
 
-export async function createRelationPersonne(relation, lang = "fr") {
+function authorizationError(action) {
+  const error = new Error(`Vous n'êtes pas autorisé à ${action} cette relation`);
+  error.code = `RELATION_${action.toUpperCase()}_FORBIDDEN`;
+  return error;
+}
+
+function isManagedPerson(personne, auth) {
+  return (
+    personne.id === auth?.personne?.id ||
+    personne.id_compte_createur === auth?.compte?.id
+  );
+}
+
+function canManageRelation(relation, source, cible, auth) {
+  if (auth?.compte?.role === "ADMIN") return true;
+  if (!auth?.compte?.id || !auth?.personne?.id) return false;
+
+  return (
+    isManagedPerson(source, auth) ||
+    isManagedPerson(cible, auth) ||
+    relation?.id_compte_createur === auth.compte.id
+  );
+}
+
+export async function createRelationPersonne(relation, lang = "fr", auth = null) {
   const relationId = await database.transaction(async () => {
     if (relation.id_personne_source === relation.id_personne_cible) {
       throw businessError(
@@ -206,6 +235,10 @@ export async function createRelationPersonne(relation, lang = "fr") {
       throw businessError("Personne introuvable", "PERSONNE_NOT_FOUND");
     }
 
+    if (!canManageRelation(null, source, cible, auth)) {
+      throw authorizationError("creer");
+    }
+
     if (!typeRelation) {
       throw businessError(
         "Type de relation introuvable",
@@ -225,14 +258,16 @@ export async function createRelationPersonne(relation, lang = "fr") {
       `INSERT INTO relation_personne (
         id_personne_source,
         id_personne_cible,
-        id_type_relation
+        id_type_relation,
+        id_compte_createur
       )
-      VALUES ($1, $2, $3)
+      VALUES ($1, $2, $3, $4)
       RETURNING id`,
       [
         relation.id_personne_source,
         relation.id_personne_cible,
         relation.id_type_relation,
+        auth.compte.id,
       ],
     );
 
@@ -246,13 +281,15 @@ export async function createRelationPersonne(relation, lang = "fr") {
         `INSERT INTO relation_personne (
           id_personne_source,
           id_personne_cible,
-          id_type_relation
+          id_type_relation,
+          id_compte_createur
         )
-        VALUES ($1, $2, $3)`,
+        VALUES ($1, $2, $3, $4)`,
         [
           relation.id_personne_cible,
           relation.id_personne_source,
           inverseTypeId,
+          auth.compte.id,
         ],
       );
     }
@@ -267,6 +304,7 @@ export async function updateRelationPersonneType(
   id,
   idTypeRelation,
   lang = "fr",
+  auth = null,
 ) {
   const relationId = await database.transaction(async () => {
     const relation = await getRelationRawById(id);
@@ -274,8 +312,9 @@ export async function updateRelationPersonneType(
       return null;
     }
 
-    const [source, oldTypeRelation, newTypeRelation] = await Promise.all([
+    const [source, cible, oldTypeRelation, newTypeRelation] = await Promise.all([
       getPersonneForRelation(relation.id_personne_source),
+      getPersonneForRelation(relation.id_personne_cible),
       getTypeRelationForInverse(relation.id_type_relation),
       getTypeRelationForInverse(idTypeRelation),
     ]);
@@ -294,6 +333,10 @@ export async function updateRelationPersonneType(
       );
     }
 
+    if (!cible || !canManageRelation(relation, source, cible, auth)) {
+      throw authorizationError("modifier");
+    }
+
     const oldInverseTypeId = resolveInverseType(oldTypeRelation, source);
     const newInverseTypeId = resolveInverseType(newTypeRelation, source);
     const inverse = await getInverseRelationRaw(
@@ -303,13 +346,17 @@ export async function updateRelationPersonneType(
     );
 
     await database.query(
-      "UPDATE relation_personne SET id_type_relation = $1 WHERE id = $2",
+      `UPDATE relation_personne
+      SET id_type_relation = $1, date_modification = now()
+      WHERE id = $2`,
       [idTypeRelation, relation.id],
     );
 
     if (inverse) {
       await database.query(
-        "UPDATE relation_personne SET id_type_relation = $1 WHERE id = $2",
+        `UPDATE relation_personne
+        SET id_type_relation = $1, date_modification = now()
+        WHERE id = $2`,
         [newInverseTypeId, inverse.id],
       );
     } else {
@@ -317,13 +364,15 @@ export async function updateRelationPersonneType(
         `INSERT INTO relation_personne (
           id_personne_source,
           id_personne_cible,
-          id_type_relation
+          id_type_relation,
+          id_compte_createur
         )
-        VALUES ($1, $2, $3)`,
+        VALUES ($1, $2, $3, $4)`,
         [
           relation.id_personne_cible,
           relation.id_personne_source,
           newInverseTypeId,
+          relation.id_compte_createur,
         ],
       );
     }
@@ -334,15 +383,16 @@ export async function updateRelationPersonneType(
   return relationId ? getRelationPersonneById(relationId, lang) : null;
 }
 
-export async function deleteRelationPersonne(id) {
+export async function deleteRelationPersonne(id, auth = null, lang = "fr") {
   return database.transaction(async () => {
     const relation = await getRelationRawById(id);
     if (!relation) {
       return null;
     }
 
-    const [source, typeRelation] = await Promise.all([
+    const [source, cible, typeRelation] = await Promise.all([
       getPersonneForRelation(relation.id_personne_source),
+      getPersonneForRelation(relation.id_personne_cible),
       getTypeRelationForInverse(relation.id_type_relation),
     ]);
 
@@ -353,6 +403,11 @@ export async function deleteRelationPersonne(id) {
       );
     }
 
+    if (!cible || !canManageRelation(relation, source, cible, auth)) {
+      throw authorizationError("supprimer");
+    }
+
+    const relationEnrichie = await getRelationPersonneById(id, lang);
     const inverseTypeId = resolveInverseType(typeRelation, source);
 
     await database.query("DELETE FROM relation_personne WHERE id = $1", [id]);
@@ -368,6 +423,6 @@ export async function deleteRelationPersonne(id) {
       ],
     );
 
-    return relation;
+    return relationEnrichie;
   });
 }

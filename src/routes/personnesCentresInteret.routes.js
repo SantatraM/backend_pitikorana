@@ -1,10 +1,11 @@
 import express from "express";
 import { add, all, byPerson, edit, one, remove } from "../controllers/personneCentreInteret.controller.js";
+import { requireAuth } from "../middlewares/auth.middleware.js";
 const router = express.Router();
 router.get("/personne/:id_personne", byPerson);
 router.get("/:id", one);
 router.get("/", all);
-router.post("/", add);
-router.put("/:id", edit);
-router.delete("/:id", remove);
+router.post("/", requireAuth, add);
+router.put("/:id", requireAuth, edit);
+router.delete("/:id", requireAuth, remove);
 export default router;

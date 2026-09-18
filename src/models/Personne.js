@@ -31,6 +31,14 @@ const date = (v, n) => {
 export default class Personne {
   constructor(d) {
     this.id = d.id ?? null;
+    Object.defineProperty(this, "id_compte_createur", {
+      value: d.id_compte_createur ?? null,
+      writable: true,
+      configurable: true,
+      enumerable: false,
+    });
+    this.date_creation = d.date_creation ?? null;
+    this.date_modification = d.date_modification ?? null;
     this.nom = text(d.nom, "nom", 100);
     if (!this.nom) throw new Error("Le nom est obligatoire");
     for (const [k, m] of [

@@ -43,8 +43,16 @@ ADD CONSTRAINT sexe_code_unique UNIQUE (code);
 -- =========================================================
 
 create table if not exists statut ( --vivant ou mort 
-    id uuid primary key default gen_random_uuid()
+    id uuid primary key default gen_random_uuid(),
+    code varchar(50) not null unique
 );
+
+insert into statut (code)
+values
+    ('VIVANT'),
+    ('DECEDE')
+on conflict (code) do nothing;
+
 create table if not exists statut_traduction (
     id uuid primary key default gen_random_uuid(),
     id_statut uuid not null references statut(id) on delete cascade,
@@ -176,6 +184,8 @@ create table if not exists personne (
     id_ville uuid references ville(id),
     id_lien uuid references lien_avec_falimanjaka(id),
     id_element uuid references element(id),
+    date_creation timestamptz not null default now(),
+    date_modification timestamptz not null default now(),
     -- L'année de décès ne peut pas précéder
     -- l'année de naissance
     check (
@@ -204,6 +214,12 @@ create table if not exists personne (
         or date_deces >= date_naissance
     )
 );
+
+alter table personne
+    add column if not exists date_creation timestamptz not null default now();
+
+alter table personne
+    add column if not exists date_modification timestamptz not null default now();
 
 create index if not exists idx_personne_sexe on personne(id_sexe);
 create index if not exists idx_personne_statut on personne(id_statut);
@@ -279,6 +295,8 @@ create table if not exists relation_personne (
         on delete cascade,
     id_type_relation uuid not null
         references type_relation(id),
+    date_creation timestamptz not null default now(),
+    date_modification timestamptz not null default now(),
     constraint relation_personne_source_cible_unique
         unique (
             id_personne_source,
@@ -290,6 +308,12 @@ create table if not exists relation_personne (
         )
 
 );
+
+alter table relation_personne
+    add column if not exists date_creation timestamptz not null default now();
+
+alter table relation_personne
+    add column if not exists date_modification timestamptz not null default now();
 -- =========================================================
 -- PHOTOS PERSONNE
 -- =========================================================
@@ -302,6 +326,36 @@ create table if not exists photos_personne (
     chemin_photo text not null,
     unique (id_personne),
     unique (chemin_photo)
+);
+
+
+-- =========================================================
+-- CONFIDENTIALITÉ D'UNE PERSONNE
+-- L'absence de ligne est interprétée côté application comme PRIVE.
+-- =========================================================
+
+create table if not exists confidentialite_personne (
+    id uuid primary key default gen_random_uuid(),
+    id_personne uuid not null references personne(id) on delete cascade,
+    champ varchar(30) not null,
+    visibilite varchar(20) not null,
+    date_modification timestamptz not null default now(),
+
+    constraint confidentialite_personne_personne_champ_unique
+        unique (id_personne, champ),
+
+    constraint confidentialite_personne_champ_check
+        check (champ in (
+            'EMAIL',
+            'FACEBOOK',
+            'TELEPHONE',
+            'WHATSAPP',
+            'ADRESSE',
+            'PHOTO'
+        )),
+
+    constraint confidentialite_personne_visibilite_check
+        check (visibilite in ('PRIVE', 'MEMBRES'))
 );
 
 

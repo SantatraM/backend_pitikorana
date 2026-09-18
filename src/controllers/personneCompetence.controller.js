@@ -25,6 +25,10 @@ function invalidId(res) {
 function handleWriteError(error, res) {
   console.error(error);
 
+  if (error.code === "PERSONNE_MANAGEMENT_FORBIDDEN") {
+    return res.status(403).json({ success: false, message: error.message });
+  }
+
   if (error.code === "PERSONNE_NOT_FOUND" || error.code === "COMPETENCE_NOT_FOUND") {
     return res.status(404).json({ success: false, message: error.message });
   }
@@ -116,7 +120,7 @@ export async function addPersonneCompetence(req, res) {
   try {
     const lang = req.query.lang || "fr";
     const association = new PersonneCompetence(req.body);
-    const nouvelleAssociation = await createPersonneCompetence(association, lang);
+    const nouvelleAssociation = await createPersonneCompetence(association, lang, req.auth);
     return res.status(201).json({
       success: true,
       message: "Compétence enregistrée avec succès",
@@ -160,6 +164,7 @@ export async function editPersonneCompetence(req, res) {
       req.params.id,
       req.body,
       lang,
+      req.auth,
     );
     if (!association) {
       return res.status(404).json({
@@ -181,7 +186,7 @@ export async function removePersonneCompetence(req, res) {
   if (!isUuid(req.params.id)) return invalidId(res);
 
   try {
-    const association = await deletePersonneCompetence(req.params.id);
+    const association = await deletePersonneCompetence(req.params.id, req.auth);
     if (!association) {
       return res.status(404).json({
         success: false,
@@ -194,7 +199,6 @@ export async function removePersonneCompetence(req, res) {
       data: association,
     });
   } catch (error) {
-    console.error(error);
-    return res.status(500).json({ success: false, message: "Erreur serveur" });
+    return handleWriteError(error, res);
   }
 }
