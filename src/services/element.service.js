@@ -14,6 +14,7 @@ function rowToElement(row) {
     etat: row.etat,
     type_element: {
       id: row.id_type_element,
+      code: row.code_type_element,
       libelle: row.libelle_type_element,
     },
     sexe: row.id_sexe ? { id: row.id_sexe } : null,
@@ -32,6 +33,7 @@ const elementsSelect = `
     e.ville_origine_conjoint,
     e.rattachement_sup,
     e.etat,
+    te.code AS code_type_element,
     te.libelle AS libelle_type_element,
     parent.id AS id_parent,
     parent.nom AS nom_parent
@@ -46,13 +48,32 @@ function hierarchyError(message, code) {
   return error;
 }
 
-function normalizeTypeLabel(libelle) {
-  return libelle.trim().toUpperCase();
-}
+async function validateNoDuplicate(element, elementId = null) {
+  const result = await database.query(
+    `
+      SELECT 1
+      FROM element e
+      JOIN type_element te ON te.id = e.id_type_element
+      WHERE e.id_type_element = $1
+        AND te.code IN ('RAZAMBE', 'TARANAKA', 'SAMPANA')
+        AND LOWER(BTRIM(e.nom)) = LOWER(BTRIM($2))
+        AND e.rattachement_sup IS NOT DISTINCT FROM $3
+        AND ($4::uuid IS NULL OR e.id <> $4)
+      LIMIT 1
+    `,
+    [element.id_type_element, element.nom, element.rattachement_sup, elementId],
+  );
 
+  if (result.rows.length > 0) {
+    throw hierarchyError(
+      "Un élément avec ce nom existe déjà à ce niveau de rattachement",
+      "ELEMENT_DUPLICATE",
+    );
+  }
+}
 async function getTypeById(id) {
   const result = await database.query(
-    `SELECT id, libelle FROM type_element WHERE id = $1`,
+    `SELECT id, code FROM type_element WHERE id = $1`,
     [id],
   );
   return result.rows[0] ?? null;
@@ -61,7 +82,7 @@ async function getTypeById(id) {
 async function getParentById(id) {
   const result = await database.query(
     `
-      SELECT e.id, e.nom, te.libelle AS libelle_type_element
+      SELECT e.id, e.nom, te.code AS code_type_element
       FROM element e
       JOIN type_element te ON te.id = e.id_type_element
       WHERE e.id = $1
@@ -112,18 +133,26 @@ async function validateHierarchy(element, elementId = null) {
     }
   }
 
-  const typeLabel = normalizeTypeLabel(type.libelle);
-  const parentTypeLabel = parent ? normalizeTypeLabel(parent.libelle_type_element) : null;
+  const typeCode = type.code;
+  const parentTypeCode = parent ? parent.code_type_element : null;
 
-  if (typeLabel === "RAZAMBE" && parent) {
+  if (typeCode === "RAZAMBE" && parent) {
     throw hierarchyError("Un RAZAMBE ne peut pas avoir de parent", "HIERARCHY_INVALID");
   }
 
-  if (typeLabel === "TARANAKA" && parentTypeLabel !== "RAZAMBE") {
+  if (typeCode === "TARANAKA" && !parent) {
+    throw hierarchyError("Un TARANAKA doit être rattaché à un RAZAMBE", "PARENT_REQUIRED");
+  }
+
+  if (typeCode === "TARANAKA" && parentTypeCode !== "RAZAMBE") {
     throw hierarchyError("Un TARANAKA doit être rattaché à un RAZAMBE", "HIERARCHY_INVALID");
   }
 
-  if (typeLabel === "SAMPANA" && parentTypeLabel !== "TARANAKA") {
+  if (typeCode === "SAMPANA" && !parent) {
+    throw hierarchyError("Un SAMPANA doit être rattaché à un TARANAKA", "PARENT_REQUIRED");
+  }
+
+  if (typeCode === "SAMPANA" && parentTypeCode !== "TARANAKA") {
     throw hierarchyError("Un SAMPANA doit être rattaché à un TARANAKA", "HIERARCHY_INVALID");
   }
 }
@@ -143,6 +172,7 @@ async function validateSexe(idSexe) {
 async function validateElement(element, elementId = null) {
   await validateSexe(element.id_sexe);
   await validateHierarchy(element, elementId);
+  await validateNoDuplicate(element, elementId);
 }
 
 export async function getAllElements() {

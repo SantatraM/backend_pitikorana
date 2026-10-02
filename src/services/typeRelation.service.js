@@ -5,6 +5,7 @@ import TypeRelationTraduction from "../models/TypeRelationTraduction.js";
 const translationsSelect = `
   SELECT
     tr.id AS id_type_relation,
+    tr.code AS code,
     tr.id_inverse_defaut,
     tr.id_inverse_masculin,
     tr.id_inverse_feminin,
@@ -29,6 +30,7 @@ function groupTypesRelation(rows) {
         row.id_type_relation,
         new TypeRelation({
           id: row.id_type_relation,
+          code: row.code,
           id_inverse_defaut: row.id_inverse_defaut,
           id_inverse_masculin: row.id_inverse_masculin,
           id_inverse_feminin: row.id_inverse_feminin,
@@ -65,6 +67,7 @@ export async function getTypesRelationByLangue(code) {
   const result = await database.query(
     `SELECT
       tr.id AS id_type_relation,
+      tr.code AS code,
       tr.id_inverse_defaut,
       tr.id_inverse_masculin,
       tr.id_inverse_feminin,
@@ -85,6 +88,7 @@ export async function getTypesRelationByLangue(code) {
 
   return result.rows.map((row) => ({
     id: row.id_type_relation,
+    code: row.code,
     id_inverse_defaut: row.id_inverse_defaut,
     id_inverse_masculin: row.id_inverse_masculin,
     id_inverse_feminin: row.id_inverse_feminin,

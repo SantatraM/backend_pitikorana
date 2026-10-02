@@ -1,5 +1,9 @@
+import { isBusinessManager } from "../utils/roles.js";
 import database from "../config/db.js";
-import { assertCanManagePersonne } from "./personneAuthorization.service.js";
+import {
+  assertCanManagePersonne,
+  isHistoricalCreatorPrivileged,
+} from "./personneAuthorization.service.js";
 
 export const CHAMPS_CONFIDENTIELS = Object.freeze([
   "EMAIL",
@@ -26,6 +30,7 @@ function emptyConfiguration(idPersonne) {
   return {
     id_personne: idPersonne,
     id_compte_createur: null,
+    has_compte_membre: false,
     visibilites: defaultVisibilites(),
   };
 }
@@ -125,6 +130,11 @@ export async function getConfidentialitesByPersonnes(idsPersonnes) {
     `SELECT
       p.id AS id_personne,
       p.id_compte_createur,
+      EXISTS (
+        SELECT 1
+        FROM compte_membre cm
+        WHERE cm.id_personne = p.id
+      ) AS has_compte_membre,
       cp.champ,
       cp.visibilite
     FROM personne p
@@ -139,6 +149,7 @@ export async function getConfidentialitesByPersonnes(idsPersonnes) {
     if (!configuration) continue;
 
     configuration.id_compte_createur = row.id_compte_createur ?? null;
+    configuration.has_compte_membre = row.has_compte_membre === true;
     if (row.champ) {
       configuration.visibilites[row.champ] = row.visibilite;
     }
@@ -160,11 +171,24 @@ export async function updatePreferencesConfidentialitePersonne(
 ) {
   const preferences = normalizePreferencesConfidentialite(body);
 
-  return database.transaction(async () => {
-    await assertCanManagePersonne(idPersonne, auth);
+  return database.transaction(() =>
+    updatePreferencesConfidentialitePersonneInTransaction(
+      idPersonne,
+      preferences,
+      auth,
+    ),
+  );
+}
 
-    await database.query(
-      `INSERT INTO confidentialite_personne (id_personne, champ, visibilite)
+export async function updatePreferencesConfidentialitePersonneInTransaction(
+  idPersonne,
+  preferences,
+  auth,
+) {
+  await assertCanManagePersonne(idPersonne, auth);
+
+  await database.query(
+    `INSERT INTO confidentialite_personne (id_personne, champ, visibilite)
       SELECT $1::uuid, preference.champ, preference.visibilite
       FROM UNNEST($2::varchar[], $3::varchar[])
         AS preference(champ, visibilite)
@@ -172,28 +196,39 @@ export async function updatePreferencesConfidentialitePersonne(
       DO UPDATE SET
         visibilite = EXCLUDED.visibilite,
         date_modification = now()`,
-      [
-        idPersonne,
-        preferences.map((preference) => preference.champ),
-        preferences.map((preference) => preference.visibilite),
-      ],
-    );
+    [
+      idPersonne,
+      preferences.map((preference) => preference.champ),
+      preferences.map((preference) => preference.visibilite),
+    ],
+  );
 
-    const configurations = await getConfidentialitesByPersonnes([idPersonne]);
-    return preferencesForApi(configurations[idPersonne]);
-  });
+  const configurations = await getConfidentialitesByPersonnes([idPersonne]);
+  return preferencesForApi(configurations[idPersonne]);
 }
 
 export function isChampConfidentielVisible(
-  { id_personne, id_compte_createur, visibilites = {} },
+  {
+    id_personne,
+    id_compte_createur,
+    has_compte_membre = false,
+    visibilites = {},
+  },
   champ,
   auth = null,
 ) {
   const normalizedChamp = normalizeChampConfidentiel(champ);
 
-  if (auth?.compte?.role === "ADMIN") return true;
+  if (isBusinessManager(auth?.compte?.role)) return true;
   if (auth?.personne?.id === id_personne) return true;
-  if (auth?.compte?.id && auth.compte.id === id_compte_createur) return true;
+  if (
+    isHistoricalCreatorPrivileged(
+      { id_personne, id_compte_createur, has_compte_membre },
+      auth,
+    )
+  ) {
+    return true;
+  }
 
   return (
     Boolean(auth?.compte?.id) &&

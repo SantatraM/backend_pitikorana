@@ -1,3 +1,5 @@
+import { BUSINESS_MANAGER_ROLES } from "../utils/roles.js";
+
 export function requireRole(...roles) {
   return (req, res, next) => {
     const role = req.auth?.compte?.role;
@@ -15,3 +17,5 @@ export function requireRole(...roles) {
     return next();
   };
 }
+
+export const requireBusinessAdmin = requireRole(...BUSINESS_MANAGER_ROLES);

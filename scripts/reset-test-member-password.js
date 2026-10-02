@@ -1,7 +1,7 @@
 import "dotenv/config";
 import { createSupabaseAdminClient } from "../src/lib/supabaseAdmin.js";
 
-const TEST_MEMBER_AUTH_USER_ID = "66430e38-aa89-44a9-a0b3-ff5b88fa3999";
+const TEST_MEMBER_AUTH_USER_ID = "7dfb65f0-cc26-4f08-b213-08644447ecd4";
 const newPassword = process.env.TEST_MEMBER_NEW_PASSWORD;
 
 if (typeof newPassword !== "string" || !newPassword) {

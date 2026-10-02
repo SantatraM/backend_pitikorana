@@ -1,8 +1,9 @@
 import StatutTraduction from "./StatutTraduction.js";
 
 export default class Statut {
-  constructor({ id = null, traductions = [] }) {
+  constructor({ id = null, code = null, traductions = [] }) {
     this.id = id;
+    this.code = code;
     this.traductions = traductions;
   }
   get id() {
@@ -10,6 +11,12 @@ export default class Statut {
   }
   set id(value) {
     this._id = value;
+  }
+  get code() {
+    return this._code;
+  }
+  set code(value) {
+    this._code = value;
   }
   get traductions() {
     return this._traductions;

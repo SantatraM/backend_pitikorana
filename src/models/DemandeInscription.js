@@ -12,6 +12,7 @@ export default class DemandeInscription {
     date_traitement = null,
     id_compte_admin_traitement = null,
     commentaire_admin = null,
+    photo_temporaire_url = null,
   } = {}) {
     this.id = id;
     this.id_personne = id_personne;
@@ -25,6 +26,7 @@ export default class DemandeInscription {
     this.date_traitement = date_traitement;
     this.id_compte_admin_traitement = id_compte_admin_traitement;
     this.commentaire_admin = commentaire_admin;
+    this.photo_temporaire_url = photo_temporaire_url;
   }
 
   toJSON() {
@@ -41,6 +43,7 @@ export default class DemandeInscription {
       date_traitement: this.date_traitement,
       id_compte_admin_traitement: this.id_compte_admin_traitement,
       commentaire_admin: this.commentaire_admin,
+      photo_temporaire_url: this.photo_temporaire_url,
     };
   }
 }

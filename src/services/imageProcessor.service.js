@@ -18,24 +18,19 @@ export async function processImage(file) {
     throw businessError("La photo ne doit pas dépasser 5 MiB", "PHOTO_TOO_LARGE");
   }
 
-  const images = getRequestContext()?.env?.IMAGES;
-  if (!images) {
+  const imageProcessor = getRequestContext()?.imageProcessor;
+  if (typeof imageProcessor !== "function") {
     throw businessError(
-      "L'upload d'image doit être exécuté via Wrangler avec Cloudflare Images",
+      "Le processeur d'image est indisponible dans cet environnement",
       "IMAGE_PROCESSOR_UNAVAILABLE",
     );
   }
 
   try {
-    const response = (
-      await images
-        .input(file.stream())
-        .transform({ width: 1200, height: 1200, fit: "scale-down" })
-        .output({ format: "image/webp", quality: 80 })
-    ).response();
-
-    return new Uint8Array(await response.arrayBuffer());
-  } catch {
+    const image = await imageProcessor(file);
+    return image instanceof Uint8Array ? image : new Uint8Array(image);
+  } catch (error) {
+    if (error?.code) throw error;
     throw businessError("L'image est invalide ou corrompue", "PHOTO_INVALID");
   }
 }

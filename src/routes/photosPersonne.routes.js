@@ -11,15 +11,23 @@ import {
 } from "../controllers/photoPersonne.controller.js";
 import { optionalAuth, requireAuth } from "../middlewares/auth.middleware.js";
 
-const router = express.Router();
+const passthrough = (_req, _res, next) => next();
 
-router.get("/personne/:id_personne", optionalAuth, getPhotoPersonneByPersonne);
-router.post("/upload/:id_personne", requireAuth, uploadPhoto);
-router.put("/upload/:id_personne", requireAuth, replaceUploadedPhoto);
-router.get("/:id", optionalAuth, getPhotoPersonne);
-router.get("/", optionalAuth, getPhotosPersonne);
-router.post("/", requireAuth, addPhotoPersonne);
-router.put("/:id", requireAuth, editPhotoPersonne);
-router.delete("/:id", requireAuth, removePhotoPersonne);
+export function createPhotosPersonneRouter({ photoUploadMiddleware = passthrough } = {}) {
+  const router = express.Router();
 
-export default router;
+  router.get("/personne/:id_personne", optionalAuth, getPhotoPersonneByPersonne);
+  // Authentication runs before the Node multipart parser. In the Worker the
+  // multipart body is parsed by the fetch adapter before Express is reached.
+  router.post("/upload/:id_personne", requireAuth, photoUploadMiddleware, uploadPhoto);
+  router.put("/upload/:id_personne", requireAuth, photoUploadMiddleware, replaceUploadedPhoto);
+  router.get("/:id", optionalAuth, getPhotoPersonne);
+  router.get("/", optionalAuth, getPhotosPersonne);
+  router.post("/", requireAuth, addPhotoPersonne);
+  router.put("/:id", requireAuth, editPhotoPersonne);
+  router.delete("/:id", requireAuth, removePhotoPersonne);
+
+  return router;
+}
+
+export default createPhotosPersonneRouter();

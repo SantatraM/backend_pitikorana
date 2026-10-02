@@ -12,6 +12,7 @@ export default class RelationPersonne {
     this.id = id;
     this.id_personne_source = id_personne_source;
     this.id_personne_cible = id_personne_cible;
+    this.id_personne_liee = id_personne_cible;
     this.id_type_relation = id_type_relation;
     Object.defineProperty(this, "id_compte_createur", {
       value: id_compte_createur,

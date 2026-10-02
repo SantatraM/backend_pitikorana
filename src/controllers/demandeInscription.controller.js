@@ -8,6 +8,9 @@ import {
   searchPersonnesPourInscription,
   validerDemandeInscription,
 } from "../services/demandeInscription.service.js";
+import { uploadTemporaryDemandePhoto } from "../services/demandeInscriptionPhoto.service.js";
+import { getRequestContext } from "../config/requestContext.js";
+import { normalizeMemoryPhotoFile } from "../services/photoUploadInput.service.js";
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -29,7 +32,7 @@ function handleCreateError(error, res) {
   ) {
     return res.status(409).json({ success: false, message: error.message });
   }
-  if (error.code === "DRAFT_FK_NOT_FOUND") {
+  if (["DRAFT_FK_NOT_FOUND", "PHOTO_REQUIRED", "TEMPORARY_PHOTO_INVALID", "TEMPORARY_PHOTO_NOT_FOUND"].includes(error.code)) {
     return res.status(400).json({ success: false, message: error.message });
   }
   if (error.code) {
@@ -98,6 +101,32 @@ export async function getDemandeInscription(req, res) {
   }
 }
 
+export async function uploadPhotoTemporaireDemande(req, res) {
+  const context = getRequestContext();
+  if (context?.uploadFormDataError) {
+    return res.status(400).json({ success: false, message: "Formulaire multipart invalide" });
+  }
+  const file = context?.uploadFile ?? normalizeMemoryPhotoFile(req.file);
+  if (!context?.uploadReady && !file) {
+    return res.status(501).json({
+      success: false,
+      message: "L'upload de photo est indisponible dans cet environnement",
+    });
+  }
+  try {
+    const photo = await uploadTemporaryDemandePhoto(file);
+    return res.status(201).json({ success: true, data: photo });
+  } catch (error) {
+    if (["PHOTO_REQUIRED", "PHOTO_TYPE_INVALID", "PHOTO_INVALID"].includes(error.code)) {
+      return res.status(400).json({ success: false, message: error.message });
+    }
+    if (error.code === "PHOTO_TOO_LARGE") {
+      return res.status(413).json({ success: false, message: error.message });
+    }
+    console.error(error.code ?? "Erreur upload photo temporaire");
+    return res.status(500).json({ success: false, message: "Erreur serveur" });
+  }
+}
 export async function addDemandeInscription(req, res) {
   try {
     const result = await createDemandeInscription(req.body);
@@ -158,6 +187,10 @@ export async function creerCompteMembre(req, res) {
 
 export async function validerDemandeInscriptionController(req, res) {
   if (!UUID_PATTERN.test(req.params.id)) return invalidId(res);
+  const requestedRole = String(req.body?.role ?? "").trim().toUpperCase();
+  if (requestedRole && requestedRole !== "MEMBRE" && req.auth.compte.role !== "ADMIN") {
+    return res.status(403).json({ success: false, message: "Seul un administrateur peut attribuer un rôle de gestion." });
+  }
   try {
     const demande = await validerDemandeInscription(
       req.params.id,
@@ -183,6 +216,10 @@ export async function validerDemandeInscriptionController(req, res) {
 
 export async function refuserDemandeInscriptionController(req, res) {
   if (!UUID_PATTERN.test(req.params.id)) return invalidId(res);
+  const requestedRole = String(req.body?.role ?? "").trim().toUpperCase();
+  if (requestedRole && requestedRole !== "MEMBRE" && req.auth.compte.role !== "ADMIN") {
+    return res.status(403).json({ success: false, message: "Seul un administrateur peut attribuer un rôle de gestion." });
+  }
   try {
     const demande = await refuserDemandeInscription(
       req.params.id,

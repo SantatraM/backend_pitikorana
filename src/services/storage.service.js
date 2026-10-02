@@ -169,6 +169,28 @@ export async function uploadStorageObject(bucket, path, body, contentType) {
   }
 }
 
+export async function downloadStorageObject(bucket, path) {
+  const { url, secret } = getStorageConfig();
+  if (!url || !secret) {
+    throw storageError(
+      "La configuration Storage est indisponible",
+      "STORAGE_UNAVAILABLE",
+    );
+  }
+
+  const response = await fetch(storageObjectUrl(url, bucket, path), {
+    method: "GET",
+    headers: storageHeaders(secret),
+  });
+  if (!response.ok) {
+    throw storageError(
+      "Photo temporaire introuvable",
+      "TEMPORARY_PHOTO_NOT_FOUND",
+    );
+  }
+
+  return new Uint8Array(await response.arrayBuffer());
+}
 export async function deleteStorageObject(
   bucket,
   path,

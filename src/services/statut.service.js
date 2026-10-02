@@ -7,7 +7,11 @@ function group(rows) {
     if (!values.has(row.id_statut))
       values.set(
         row.id_statut,
-        new Statut({ id: row.id_statut, traductions: [] }),
+        new Statut({
+          id: row.id_statut,
+          code: row.code_statut,
+          traductions: [],
+        }),
       );
     if (row.id_traduction)
       values
@@ -26,7 +30,7 @@ function group(rows) {
   }
   return [...values.values()];
 }
-const select = `SELECT s.id AS id_statut, st.id AS id_traduction, st.libelle, l.id AS id_langue, l.code AS code_langue, l.nom AS nom_langue FROM statut s LEFT JOIN statut_traduction st ON st.id_statut = s.id LEFT JOIN langue l ON l.id = st.id_langue`;
+const select = `SELECT s.id AS id_statut, s.code AS code_statut, st.id AS id_traduction, st.libelle, l.id AS id_langue, l.code AS code_langue, l.nom AS nom_langue FROM statut s LEFT JOIN statut_traduction st ON st.id_statut = s.id LEFT JOIN langue l ON l.id = st.id_langue`;
 export async function getAllStatuts() {
   return group((await database.query(`${select} ORDER BY s.id, l.code`)).rows);
 }

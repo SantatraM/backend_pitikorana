@@ -2,6 +2,15 @@ import database from "../config/db.js";
 import { createSupabaseAdminClient } from "../lib/supabaseAdmin.js";
 import DemandeInscription from "../models/DemandeInscription.js";
 import { normalizeTelephonePourAuth } from "../utils/telephoneAuth.js";
+import { CHAMPS_CONFIDENTIELS, VISIBILITES_CONFIDENTIELLES } from "./confidentialitePersonne.service.js";
+import {
+  applyTemporaryDemandePhoto,
+  assertTemporaryDemandePhoto,
+  cleanupReplacedPersonPhoto,
+  deleteTemporaryDemandePhoto,
+  normalizeTemporaryDemandePhotoPath,
+  signedTemporaryDemandePhoto,
+} from "./demandeInscriptionPhoto.service.js";
 import {
   generateCodeSuivi,
   generateReference,
@@ -35,13 +44,15 @@ const RESERVED_FIELDS = new Set([
 ]);
 const MAX_REFERENCE_ATTEMPTS = 5;
 const MAX_PERSONNE_SEARCH_RESULTS = 20;
-const ASSIGNABLE_ROLE_CODES = new Set(["MEMBRE", "ADMIN"]);
+const ASSIGNABLE_ROLE_CODES = new Set(["MEMBRE", "ADMIN", "PASTEUR", "BUREAU_ZANAKA_AMPIELEZANA"]);
 const DRAFT_ROOT_FIELDS = new Set([
   "personne",
   "contact",
   "activites",
   "competences",
   "centres_interet",
+  "confidentialite",
+  "photo_temporaire",
 ]);
 const DRAFT_PERSONNE_FIELDS = new Set([
   "nom",
@@ -49,9 +60,12 @@ const DRAFT_PERSONNE_FIELDS = new Set([
   "nom_usage",
   "autres_appellations",
   "id_sexe",
+  "id_statut",
   "date_naissance",
   "annee_naissance",
   "lieu_naissance",
+  "date_deces",
+  "annee_deces",
   "adresse",
   "id_ville",
   "id_lien",
@@ -160,6 +174,32 @@ function normalizeBirthYear(value) {
   return value;
 }
 
+function normalizeDeathDate(value) {
+  if (value == null || value === "") return null;
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new Error("Date de décès invalide");
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) throw new Error("Date de décès invalide");
+  return value;
+}
+
+function normalizeDeathYear(value) {
+  if (value == null || value === "") return null;
+  if (!Number.isInteger(value) || value < 1800 || value > 2100) throw new Error("Année de décès invalide");
+  return value;
+}
+
+function normalizeConfidentialiteDraft(value) {
+  if (value == null) return {};
+  assertPlainObject(value, "Les préférences de confidentialité sont invalides");
+  return Object.fromEntries(Object.entries(value).map(([champ, visibilite]) => {
+    if (!CHAMPS_CONFIDENTIELS.includes(champ)) throw new Error("Champ de confidentialité invalide");
+    const normalized = typeof visibilite === "string" ? visibilite.trim().toUpperCase() : null;
+    if (!VISIBILITES_CONFIDENTIELLES.includes(normalized)) throw new Error("Visibilité invalide");
+    return [champ, normalized];
+  }));
+}
+
 function normalizePersonneDraft(value) {
   assertPlainObject(value, "Les données personne sont invalides");
   assertAllowedFields(value, DRAFT_PERSONNE_FIELDS, "Champ personne non autorisé");
@@ -174,9 +214,12 @@ function normalizePersonneDraft(value) {
       255,
     ),
     id_sexe: normalizeUuid(value.id_sexe, "Identifiant de sexe"),
+    id_statut: normalizeUuid(value.id_statut, "Identifiant de statut"),
     date_naissance: normalizeCivilDate(value.date_naissance),
     annee_naissance: normalizeBirthYear(value.annee_naissance),
     lieu_naissance: normalizeOptionalText(value.lieu_naissance, "Lieu de naissance", 150),
+    date_deces: normalizeDeathDate(value.date_deces),
+    annee_deces: normalizeDeathYear(value.annee_deces),
     adresse: normalizeOptionalText(value.adresse, "Adresse", 255),
     id_ville: normalizeUuid(value.id_ville, "Identifiant de ville"),
     id_lien: normalizeUuid(value.id_lien, "Identifiant de lien"),
@@ -190,6 +233,9 @@ function normalizePersonneDraft(value) {
   ) {
     throw new Error("L'année de naissance ne correspond pas à la date de naissance");
   }
+  if (personne.date_deces && personne.annee_deces && Number(personne.date_deces.slice(0, 4)) !== personne.annee_deces) throw new Error("L'année de décès ne correspond pas à la date de décès");
+  if (personne.date_naissance && personne.date_deces && personne.date_deces < personne.date_naissance) throw new Error("La date de décès ne peut pas précéder la date de naissance");
+  if (personne.annee_naissance && personne.annee_deces && personne.annee_deces < personne.annee_naissance) throw new Error("L'année de décès ne peut pas précéder l'année de naissance");
   return personne;
 }
 
@@ -261,15 +307,22 @@ function normalizeCentreInteretDraft(value) {
 function normalizeDonnees(value, hasExistingPersonne) {
   const donnees = value === undefined ? {} : value;
   assertPlainObject(donnees, "Les données de profil sont invalides");
+  assertAllowedFields(donnees, DRAFT_ROOT_FIELDS, "Champ de données non autorisé");
+
+  if (!Object.hasOwn(donnees, "photo_temporaire")) {
+    throw businessError("La photo est obligatoire", "PHOTO_REQUIRED");
+  }
+  const photo_temporaire = normalizeTemporaryDemandePhotoPath(
+    donnees.photo_temporaire,
+  );
 
   if (hasExistingPersonne) {
-    if (Object.keys(donnees).length !== 0) {
-      throw new Error("Les données doivent être vides pour une personne existante");
+    if (Object.keys(donnees).some((key) => key !== "photo_temporaire")) {
+      throw new Error("Les données doivent être limitées à la photo pour une personne existante");
     }
-    return {};
+    return { photo_temporaire };
   }
 
-  assertAllowedFields(donnees, DRAFT_ROOT_FIELDS, "Champ de données non autorisé");
   if (!Object.hasOwn(donnees, "personne")) {
     throw new Error("Les données personne sont obligatoires pour une nouvelle personne");
   }
@@ -302,6 +355,8 @@ function normalizeDonnees(value, hasExistingPersonne) {
     activites,
     competences,
     centres_interet: centresInteret,
+    confidentialite: normalizeConfidentialiteDraft(donnees.confidentialite),
+    photo_temporaire,
   };
 }
 
@@ -391,7 +446,7 @@ function normalizeCreateCompteBody(body = {}) {
   return { reference, code_suivi: codeSuivi, mot_de_passe: body.mot_de_passe };
 }
 
-function mapDemandeRow(row) {
+async function mapDemandeRow(row) {
   return new DemandeInscription({
     id: row.id,
     id_personne: row.id_personne,
@@ -413,6 +468,9 @@ function mapDemandeRow(row) {
     date_traitement: row.date_traitement,
     id_compte_admin_traitement: row.id_compte_admin_traitement,
     commentaire_admin: row.commentaire_admin,
+    photo_temporaire_url: await signedTemporaryDemandePhoto(
+      row.donnees?.photo_temporaire,
+    ),
   });
 }
 
@@ -444,6 +502,7 @@ async function validateDonneesReferences(donnees) {
 
   await Promise.all([
     validateReferences("sexe", [donnees.personne.id_sexe], "Référence de sexe"),
+    validateReferences("statut", [donnees.personne.id_statut], "Référence de statut"),
     validateReferences("ville", [donnees.personne.id_ville], "Référence de ville"),
     validateReferences(
       "lien_avec_falimanjaka",
@@ -515,6 +574,13 @@ async function getStatutPersonneVivant() {
   return result.rows[0];
 }
 
+async function getStatutPersonne(idStatut) {
+  if (!idStatut) return getStatutPersonneVivant();
+  const result = await database.query("SELECT id, code FROM statut WHERE id = $1", [idStatut]);
+  if (!result.rows[0]) throw businessError("Référence de statut inexistante", "DRAFT_FK_NOT_FOUND");
+  return result.rows[0];
+}
+
 async function lockDemandeEnAttente(id) {
   const result = await database.query(
     `SELECT
@@ -552,6 +618,7 @@ async function getDemandeForAccountCreation(reference) {
       di.telephone,
       di.token_suivi_hash,
       di.id_role_attribue,
+      di.donnees,
       sdi.code AS code_statut_demande
     FROM demande_inscription di
     JOIN statut_demande_inscription sdi
@@ -599,6 +666,7 @@ async function lockDemandeValidee(id) {
       di.email,
       di.telephone,
       di.id_role_attribue,
+      di.donnees,
       sdi.code AS code_statut_demande
     FROM demande_inscription di
     JOIN statut_demande_inscription sdi
@@ -690,7 +758,8 @@ function getNormalizedStoredDraft(donnees) {
 async function createPersonneDepuisBrouillon(demande) {
   const donnees = getNormalizedStoredDraft(demande.donnees);
   const personne = donnees.personne;
-  const statutVivant = await getStatutPersonneVivant();
+  const statut = await getStatutPersonne(personne.id_statut);
+  const estDecede = statut.code === "DECEDE";
 
   const personneResult = await database.query(
     `INSERT INTO personne (
@@ -720,12 +789,12 @@ async function createPersonneDepuisBrouillon(demande) {
       personne.nom_usage,
       personne.autres_appellations,
       personne.id_sexe,
-      statutVivant.id,
+      statut.id,
       personne.date_naissance,
       personne.annee_naissance,
       personne.lieu_naissance,
-      null,
-      null,
+      estDecede ? personne.date_deces : null,
+      estDecede ? personne.annee_deces : null,
       personne.adresse,
       personne.id_ville,
       personne.id_lien,
@@ -801,6 +870,16 @@ async function createPersonneDepuisBrouillon(demande) {
       `INSERT INTO personne_centre_interet (id_personne, id_centre_interet)
       VALUES ($1, $2)`,
       [idPersonne, centreInteret.id_centre_interet],
+    );
+  }
+
+  const preferences = Object.entries(donnees.confidentialite ?? {});
+  if (preferences.length > 0) {
+    await database.query(
+      `INSERT INTO confidentialite_personne (id_personne, champ, visibilite)
+       SELECT $1::uuid, preference.champ, preference.visibilite
+       FROM UNNEST($2::varchar[], $3::varchar[]) AS preference(champ, visibilite)`,
+      [idPersonne, preferences.map(([champ]) => champ), preferences.map(([, visibilite]) => visibilite)],
     );
   }
 
@@ -914,7 +993,7 @@ export async function getAllDemandesInscription() {
   const result = await database.query(
     "SELECT * FROM v_demande_inscription ORDER BY date_demande DESC",
   );
-  return result.rows.map(mapDemandeRow);
+  return Promise.all(result.rows.map(mapDemandeRow));
 }
 
 export async function getDemandeInscriptionById(id) {
@@ -922,11 +1001,12 @@ export async function getDemandeInscriptionById(id) {
     "SELECT * FROM v_demande_inscription WHERE id = $1",
     [id],
   );
-  return result.rows[0] ? mapDemandeRow(result.rows[0]) : null;
+  return result.rows[0] ? await mapDemandeRow(result.rows[0]) : null;
 }
 
 export async function createDemandeInscription(body) {
   const input = normalizePayload(body);
+  await assertTemporaryDemandePhoto(input.donnees.photo_temporaire);
 
   return database.transaction(async () => {
     await validatePersonne(input.id_personne);
@@ -1074,8 +1154,10 @@ export async function validerDemandeInscription(id, body, idCompteAdmin) {
     "Identifiant de compte administrateur",
     true,
   );
+  let photoApplication = null;
+  let photoTemporaire = null;
 
-  return database.transaction(async () => {
+  const validation = await database.transaction(async () => {
     const demande = await lockDemandeEnAttente(id);
     if (!demande) {
       throw businessError(
@@ -1086,6 +1168,13 @@ export async function validerDemandeInscription(id, body, idCompteAdmin) {
 
     const roleAttribue = await getRoleByCode(roleCode);
     const idPersonne = demande.id_personne ?? (await createPersonneDepuisBrouillon(demande));
+    photoTemporaire = demande.donnees?.photo_temporaire ?? null;
+    if (photoTemporaire) {
+      photoApplication = await applyTemporaryDemandePhoto(
+        idPersonne,
+        photoTemporaire,
+      );
+    }
     return finaliserDemande({
       demandeId: demande.id,
       idPersonne,
@@ -1095,6 +1184,14 @@ export async function validerDemandeInscription(id, body, idCompteAdmin) {
       commentaireAdmin,
     });
   });
+
+  if (photoApplication?.previousPath) {
+    await cleanupReplacedPersonPhoto(photoApplication.previousPath).catch(() => {});
+  }
+  if (photoTemporaire) {
+    await deleteTemporaryDemandePhoto(photoTemporaire).catch(() => {});
+  }
+  return validation;
 }
 
 export async function refuserDemandeInscription(id, body, idCompteAdmin) {
@@ -1104,8 +1201,9 @@ export async function refuserDemandeInscription(id, body, idCompteAdmin) {
     "Identifiant de compte administrateur",
     true,
   );
+  let photoTemporaire = null;
 
-  return database.transaction(async () => {
+  const refusal = await database.transaction(async () => {
     const demande = await lockDemandeEnAttente(id);
     if (!demande) {
       throw businessError(
@@ -1114,6 +1212,7 @@ export async function refuserDemandeInscription(id, body, idCompteAdmin) {
       );
     }
 
+    photoTemporaire = demande.donnees?.photo_temporaire ?? null;
     return finaliserDemande({
       demandeId: demande.id,
       idPersonne: demande.id_personne,
@@ -1123,6 +1222,11 @@ export async function refuserDemandeInscription(id, body, idCompteAdmin) {
       commentaireAdmin,
     });
   });
+
+  if (photoTemporaire) {
+    await deleteTemporaryDemandePhoto(photoTemporaire).catch(() => {});
+  }
+  return refusal;
 }
 
 export async function getSuiviDemandeInscription(referenceValue, codeValue) {

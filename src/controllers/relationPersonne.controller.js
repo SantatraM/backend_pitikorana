@@ -40,6 +40,14 @@ function handleWriteError(error, res) {
     return res.status(404).json({ success: false, message: error.message });
   }
 
+  if (error.code === "FAMILY_PROPAGATION_CONFLICT") {
+    return res.status(409).json({ success: false, message: error.message });
+  }
+
+  if (error.code === "CONJOINT_ALREADY_EXISTS") {
+    return res.status(409).json({ success: false, message: error.message });
+  }
+
   if (["RELATION_EXISTS", "23505"].includes(error.code)) {
     return res.status(409).json({
       success: false,
@@ -62,6 +70,7 @@ const SERVER_MANAGED_FIELDS = new Set([
   "id_compte_createur",
   "date_creation",
   "date_modification",
+  "origine",
 ]);
 
 function hasServerManagedField(body) {

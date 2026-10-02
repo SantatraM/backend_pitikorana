@@ -11,7 +11,7 @@ import {
 } from "../services/element.service.js";
 
 const UUID_PATTERN =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function isUuid(value) {
   return UUID_PATTERN.test(value);
@@ -56,8 +56,8 @@ function createElementFromBody(body, existing = null) {
 function handleWriteError(error, res) {
   console.error(error);
 
-  if (error.code === "HAS_CHILDREN") {
-    return res.status(409).json({ success: false, message: error.message });
+  if (error.code === "HAS_CHILDREN" || error.code === "ELEMENT_DUPLICATE") {
+    return res.status(409).json({ success: false, code: error.code, message: error.message });
   }
 
   if (
@@ -65,6 +65,7 @@ function handleWriteError(error, res) {
       "TYPE_NOT_FOUND",
       "SEXE_NOT_FOUND",
       "PARENT_NOT_FOUND",
+      "PARENT_REQUIRED",
       "SELF_PARENT",
       "HIERARCHY_CYCLE",
       "HIERARCHY_INVALID",

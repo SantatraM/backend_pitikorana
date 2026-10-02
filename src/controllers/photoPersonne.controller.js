@@ -10,6 +10,7 @@ import {
   replaceUploadedPhotoPersonne,
 } from "../services/photoPersonne.service.js";
 import { getRequestContext } from "../config/requestContext.js";
+import { normalizeMemoryPhotoFile } from "../services/photoUploadInput.service.js";
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -134,15 +135,15 @@ export async function uploadPhoto(req, res) {
   if (context?.uploadFormDataError) {
     return res.status(400).json({ success: false, message: "Formulaire multipart invalide" });
   }
-  if (!context?.uploadFormData) {
+  const file = context?.uploadFile ?? normalizeMemoryPhotoFile(req.file);
+  if (!context?.uploadReady && !file) {
     return res.status(501).json({
       success: false,
-      message: "L'upload d'image doit être exécuté via Wrangler avec Cloudflare Images",
+      message: "Le traitement d'upload est indisponible dans cet environnement",
     });
   }
 
-  const file = context.uploadFormData.get("photo");
-  if (!file || typeof file.stream !== "function") {
+  if (!file) {
     return res.status(400).json({ success: false, message: "La photo est obligatoire" });
   }
 
@@ -172,15 +173,15 @@ export async function replaceUploadedPhoto(req, res) {
   if (context?.uploadFormDataError) {
     return res.status(400).json({ success: false, message: "Formulaire multipart invalide" });
   }
-  if (!context?.uploadFormData) {
+  const file = context?.uploadFile ?? normalizeMemoryPhotoFile(req.file);
+  if (!context?.uploadReady && !file) {
     return res.status(501).json({
       success: false,
-      message: "L'upload d'image doit être exécuté via Wrangler avec Cloudflare Images",
+      message: "Le traitement d'upload est indisponible dans cet environnement",
     });
   }
 
-  const file = context.uploadFormData.get("photo");
-  if (!file || typeof file.stream !== "function") {
+  if (!file) {
     return res.status(400).json({ success: false, message: "La photo est obligatoire" });
   }
 

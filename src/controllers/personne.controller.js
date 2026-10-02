@@ -1,9 +1,11 @@
 import Personne from "../models/Personne.js";
 import * as s from "../services/personne.service.js";
+import { getPersistentFoyerByPersonne } from "../services/foyer.service.js";
 import {
   getPreferencesConfidentialitePersonne,
   updatePreferencesConfidentialitePersonne,
 } from "../services/confidentialitePersonne.service.js";
+import { createPersonneComplete, updatePersonneComplete } from "../services/personneComplete.service.js";
 const re = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const bad = (res) =>
   res.status(400).json({ success: false, message: "Identifiant invalide" });
@@ -19,7 +21,10 @@ const hasServerManagedField = (body) =>
   !Array.isArray(body) &&
   Object.keys(body).some((field) => SERVER_MANAGED_FIELDS.has(field));
 const err = (e, res) => {
-  if (e.code === "PERSONNE_UPDATE_FORBIDDEN") {
+  if (
+    e.code === "PERSONNE_UPDATE_FORBIDDEN" ||
+    e.code === "PERSONNE_MANAGEMENT_FORBIDDEN"
+  ) {
     return res.status(403).json({ success: false, message: e.message });
   }
   console.error(e);
@@ -75,6 +80,102 @@ export async function profil(q, r) {
       ? r.json({ success: true, data: profilPersonne })
       : r.status(404).json({ success: false, message: "Personne introuvable" });
   } catch (e) {
+    console.error(e);
+    return r.status(500).json({ success: false, message: "Erreur serveur" });
+  }
+}
+export async function ascendants(q, r) {
+  if (!re.test(q.params.id)) return bad(r);
+  try {
+    const arbre = await s.getAscendantsPersonne(q.params.id);
+    return arbre
+      ? r.json({ success: true, data: arbre })
+      : r.status(404).json({ success: false, message: "Personne introuvable" });
+  } catch (e) {
+    console.error(e);
+    return r.status(500).json({ success: false, message: "Erreur serveur" });
+  }
+}
+
+export async function genealogicalDescendants(q, r) {
+  if (!re.test(q.params.id)) return bad(r);
+  try {
+    const arbre = await s.getDescendantsPersonne(q.params.id);
+    return arbre
+      ? r.json({ success: true, data: arbre })
+      : r.status(404).json({ success: false, message: "Personne introuvable" });
+  } catch (e) {
+    console.error(e);
+    return r.status(500).json({ success: false, message: "Erreur serveur" });
+  }
+}
+export async function fratrie(q, r) {
+  if (!re.test(q.params.id)) return bad(r);
+  try {
+    const resultat = await s.getFratriePersonne(q.params.id);
+    return resultat
+      ? r.json({ success: true, data: resultat })
+      : r.status(404).json({ success: false, message: "Personne introuvable" });
+  } catch (e) {
+    console.error(e);
+    return r.status(500).json({ success: false, message: "Erreur serveur" });
+  }
+}
+export async function conjoints(q, r) {
+  if (!re.test(q.params.id)) return bad(r);
+  try {
+    const resultat = await s.getConjointsPersonne(q.params.id);
+    return resultat
+      ? r.json({ success: true, data: resultat })
+      : r.status(404).json({ success: false, message: "Personne introuvable" });
+  } catch (e) {
+    console.error(e);
+    return r.status(500).json({ success: false, message: "Erreur serveur" });
+  }
+}
+export async function famille(q, r) {
+  if (!re.test(q.params.id)) return bad(r);
+  try {
+    const resultat = await s.getFamillePersonne(q.params.id);
+    return resultat
+      ? r.json({ success: true, data: resultat })
+      : r.status(404).json({ success: false, message: "Personne introuvable" });
+  } catch (e) {
+    console.error(e);
+    return r.status(500).json({ success: false, message: "Erreur serveur" });
+  }
+}
+export async function foyer(q, r) {
+  if (!re.test(q.params.id)) return bad(r);
+  try {
+    const resultat = await s.getFoyerPersonne(q.params.id);
+    return resultat
+      ? r.json({ success: true, data: resultat })
+      : r.status(404).json({ success: false, message: "Personne introuvable" });
+  } catch (e) {
+    if (["FOYER_PARENT_CONFLICT", "FOYER_CONJOINT_CONFLICT"].includes(e.code)) {
+      return r.status(409).json({ success: false, message: e.message });
+    }
+    console.error(e);
+    return r.status(500).json({ success: false, message: "Erreur serveur" });
+  }
+}
+export async function foyerPersistant(q, r) {
+  if (!re.test(q.params.id)) return bad(r);
+  try {
+    const resultat = await getPersistentFoyerByPersonne(q.params.id);
+    return r.json({
+      success: true,
+      data: resultat,
+      message: resultat ? undefined : "Aucun foyer enregistré pour cette personne.",
+    });
+  } catch (e) {
+    if (e.code === "FOYER_PERSONNE_NOT_FOUND") {
+      return r.status(404).json({ success: false, message: e.message });
+    }
+    if (e.code === "FOYER_PERSISTENT_AMBIGUOUS") {
+      return r.status(409).json({ success: false, message: e.message });
+    }
     console.error(e);
     return r.status(500).json({ success: false, message: "Erreur serveur" });
   }
@@ -158,6 +259,37 @@ export async function add(q, r) {
         q.auth,
       ),
     });
+  } catch (e) {
+    return err(e, r);
+  }
+}
+export async function addComplete(q, r) {
+  try {
+    const lang = q.query.lang || "fr";
+    const result = await createPersonneComplete(q.body, lang, q.auth);
+    return r.status(201).json({
+      success: true,
+      message: "Personne créée avec succès",
+      data: result,
+    });
+  } catch (e) {
+    return err(e, r);
+  }
+}
+export async function editComplete(q, r) {
+  if (!re.test(q.params.id)) return bad(r);
+  if (hasServerManagedField(q.body?.personne)) {
+    return r.status(400).json({
+      success: false,
+      message: "Ces champs sont gérés par le serveur",
+    });
+  }
+  try {
+    const lang = q.query.lang || "fr";
+    const result = await updatePersonneComplete(q.params.id, q.body, lang, q.auth);
+    return result
+      ? r.json({ success: true, message: "Personne modifiée avec succès", data: result })
+      : r.status(404).json({ success: false, message: "Personne introuvable" });
   } catch (e) {
     return err(e, r);
   }

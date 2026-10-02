@@ -1,6 +1,7 @@
 export default class TypeElement {
-  constructor({ id = null, libelle }) {
+  constructor({ id = null, code = null, libelle }) {
     this.id = id;
+    this.code = code;
     this.libelle = libelle;
   }
 
@@ -10,6 +11,14 @@ export default class TypeElement {
 
   set id(valeur) {
     this._id = valeur;
+  }
+
+  get code() {
+    return this._code;
+  }
+
+  set code(valeur) {
+    this._code = valeur || null;
   }
 
   get libelle() {
