@@ -37,13 +37,60 @@ import journeesAlahadinTaranakaRoutes from "./routes/journeesAlahadinTaranaka.ro
 import sosoKevitraRoutes, {
   createSosoKevitraRouter,
 } from "./routes/sosoKevitra.routes.js";
-import { runWithRequestContext } from "./config/requestContext.js";
+import {
+  getRequestContext,
+  runWithRequestContext,
+} from "./config/requestContext.js";
+
+function getEnvironmentValue(name) {
+  return getRequestContext()?.env?.[name] ?? process.env[name];
+}
+
+function normalizedOrigin(value) {
+  if (typeof value !== "string" || !value.trim()) return null;
+  try {
+    return new URL(value).origin;
+  } catch {
+    return null;
+  }
+}
+
+function isDevelopmentEnvironment() {
+  return getEnvironmentValue("NODE_ENV") !== "production";
+}
+
+function isAllowedFrontendOrigin(origin) {
+  if (!origin) return true;
+
+  const configuredOrigin = normalizedOrigin(getEnvironmentValue("FRONTEND_URL"));
+  if (configuredOrigin && origin === configuredOrigin) return true;
+
+  return (
+    isDevelopmentEnvironment() &&
+    /^http:\/\/(localhost|127\.0\.0\.1)(?::\d+)?$/.test(origin)
+  );
+}
 
 export function createApp({ photoUploadMiddleware, requestContext = null } = {}) {
   const app = express();
 
-// TODO: restreindre les origines CORS et finaliser la stratégie CSRF avant production.
-  app.use(cors({ origin: true, credentials: true }));
+  app.use((req, res, next) => {
+    if (!isAllowedFrontendOrigin(req.get("Origin"))) {
+      return res.status(403).json({
+        success: false,
+        message: "Origine non autorisée",
+      });
+    }
+    return next();
+  });
+  app.use(
+    cors({
+      origin(origin, callback) {
+        callback(null, isAllowedFrontendOrigin(origin));
+      },
+      credentials: true,
+    }),
+  );
   app.use(express.json());
 
   if (requestContext) {

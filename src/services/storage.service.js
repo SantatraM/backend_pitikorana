@@ -12,7 +12,11 @@ function getStorageConfig() {
   const env = getRequestContext()?.env;
   return {
     url: env?.SUPABASE_URL ?? process.env.SUPABASE_URL,
-    secret: env?.SUPABASE_SECRET_KEY ?? process.env.SUPABASE_SECRET_KEY,
+    secret:
+      env?.SUPABASE_SERVICE_ROLE_KEY ??
+      process.env.SUPABASE_SERVICE_ROLE_KEY ??
+      env?.SUPABASE_SECRET_KEY ??
+      process.env.SUPABASE_SECRET_KEY,
   };
 }
 

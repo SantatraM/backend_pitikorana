@@ -6,10 +6,18 @@ function getEnvironmentValue(name) {
   return getRequestContext()?.env?.[name] ?? process.env[name];
 }
 
+function isProductionEnvironment() {
+  return getEnvironmentValue("NODE_ENV") === "production";
+}
+
 function isSecureCookie() {
   const configured = getEnvironmentValue("AUTH_COOKIE_SECURE");
   if (configured !== undefined) return configured === "true";
-  return getEnvironmentValue("NODE_ENV") === "production";
+  return isProductionEnvironment();
+}
+
+function cookieSameSite() {
+  return isProductionEnvironment() ? "none" : "lax";
 }
 
 function positiveInteger(value, fallback) {
@@ -21,7 +29,7 @@ function baseCookieOptions() {
   return {
     httpOnly: true,
     secure: isSecureCookie(),
-    sameSite: "lax",
+    sameSite: cookieSameSite(),
     path: "/",
   };
 }
