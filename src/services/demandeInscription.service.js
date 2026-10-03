@@ -1,4 +1,6 @@
 import database from "../config/db.js";
+import Element from "../models/Element.js";
+import { createElement } from "./element.service.js";
 import { createSupabaseAdminClient } from "../lib/supabaseAdmin.js";
 import DemandeInscription from "../models/DemandeInscription.js";
 import { normalizeTelephonePourAuth } from "../utils/telephoneAuth.js";
@@ -53,7 +55,10 @@ const DRAFT_ROOT_FIELDS = new Set([
   "centres_interet",
   "confidentialite",
   "photo_temporaire",
+  "origine_declaree",
 ]);
+const DRAFT_ORIGIN_FIELDS = new Set(["razambe", "taranaka", "sampana"]);
+const DRAFT_ORIGIN_LEVEL_FIELDS = new Set(["id", "nom_propose"]);
 const DRAFT_PERSONNE_FIELDS = new Set([
   "nom",
   "prenom",
@@ -89,6 +94,45 @@ function businessError(message, code) {
   return error;
 }
 
+function normalizeOriginLevel(value, label) {
+  if (value == null) return { id: null, nom_propose: null };
+  assertPlainObject(value, `L'origine ${label} est invalide`);
+  assertAllowedFields(value, DRAFT_ORIGIN_LEVEL_FIELDS, `L'origine ${label} est invalide`);
+  const id = normalizeUuid(value.id, `Identifiant ${label}`);
+  const nomPropose = normalizeOptionalText(value.nom_propose, `Nom ${label}`, 100);
+  if (id && nomPropose) {
+    throw businessError(`L'origine ${label} est ambiguë`, "ORIGINE_DECLARATION_INVALID");
+  }
+  return { id, nom_propose: nomPropose };
+}
+
+function originLevelPresent(level) {
+  return Boolean(level?.id || level?.nom_propose);
+}
+
+function normalizeDeclaredOrigin(value) {
+  if (value === undefined) return null;
+  assertPlainObject(value, "L'origine déclarée est invalide");
+  assertAllowedFields(value, DRAFT_ORIGIN_FIELDS, "L'origine déclarée est invalide");
+  const origine = {
+    razambe: normalizeOriginLevel(value.razambe, "Razambe"),
+    taranaka: normalizeOriginLevel(value.taranaka, "Taranaka"),
+    sampana: normalizeOriginLevel(value.sampana, "Sampana"),
+  };
+  if (originLevelPresent(origine.taranaka) && !originLevelPresent(origine.razambe)) {
+    throw businessError("Un Taranaka déclaré doit avoir un Razambe", "ORIGINE_DECLARATION_INVALID");
+  }
+  if (originLevelPresent(origine.sampana) && !originLevelPresent(origine.taranaka)) {
+    throw businessError("Une Sampana déclarée doit avoir un Taranaka", "ORIGINE_DECLARATION_INVALID");
+  }
+  if (origine.razambe.nom_propose && origine.taranaka.id) {
+    throw businessError("Un Taranaka existant exige un Razambe existant", "ORIGINE_DECLARATION_INVALID");
+  }
+  if (origine.taranaka.nom_propose && origine.sampana.id) {
+    throw businessError("Une Sampana existante exige un Taranaka existant", "ORIGINE_DECLARATION_INVALID");
+  }
+  return origine;
+}
 function normalizeEmail(value) {
   if (value == null || value === "") return null;
   if (typeof value !== "string") throw new Error("Email invalide");
@@ -327,6 +371,12 @@ function normalizeDonnees(value, hasExistingPersonne) {
     throw new Error("Les données personne sont obligatoires pour une nouvelle personne");
   }
 
+  const personne = normalizePersonneDraft(donnees.personne);
+  const origine_declaree = normalizeDeclaredOrigin(donnees.origine_declaree);
+  if (origine_declaree) {
+    personne.id_element = origine_declaree.sampana.id ?? origine_declaree.taranaka.id ?? origine_declaree.razambe.id ?? null;
+  }
+
   const activites = normalizeArrayDraft(
     donnees.activites,
     "Activités",
@@ -350,13 +400,14 @@ function normalizeDonnees(value, hasExistingPersonne) {
   ensureNoDuplicate(centresInteret, "id_centre_interet", "centre d'intérêt");
 
   return {
-    personne: normalizePersonneDraft(donnees.personne),
+    personne,
     contact: normalizeContactDraft(donnees.contact),
     activites,
     competences,
     centres_interet: centresInteret,
     confidentialite: normalizeConfidentialiteDraft(donnees.confidentialite),
     photo_temporaire,
+    origine_declaree,
   };
 }
 
@@ -497,8 +548,69 @@ async function validateReferences(table, ids, label) {
   }
 }
 
+async function getDeclaredElement(id) {
+  const result = await database.query(
+    `SELECT e.id, e.nom, e.rattachement_sup, te.id AS id_type_element, te.code AS type_code FROM element e JOIN type_element te ON te.id = e.id_type_element WHERE e.id = $1`,
+    [id],
+  );
+  return result.rows[0] ?? null;
+}
+
+async function findDeclaredElement(typeCode, parentId, nom) {
+  const result = await database.query(
+    `SELECT e.id, e.nom, e.rattachement_sup, te.id AS id_type_element, te.code AS type_code FROM element e JOIN type_element te ON te.id = e.id_type_element WHERE te.code = $1 AND e.rattachement_sup IS NOT DISTINCT FROM $2::uuid AND LOWER(BTRIM(e.nom)) = LOWER(BTRIM($3)) ORDER BY e.id LIMIT 2`,
+    [typeCode, parentId, nom],
+  );
+  return result.rows;
+}
+
+async function assertDeclaredElement(level, typeCode, parentId) {
+  if (!level?.id) return null;
+  const element = await getDeclaredElement(level.id);
+  if (!element || element.type_code !== typeCode || element.rattachement_sup !== parentId) {
+    throw businessError("L'origine déclarée ne correspond pas à la hiérarchie", "ORIGINE_DECLARATION_INVALID");
+  }
+  return element;
+}
+
+async function validateDeclaredOriginReferences(origine) {
+  if (!origine) return;
+  const razambe = await assertDeclaredElement(origine.razambe, "RAZAMBE", null);
+  const taranaka = await assertDeclaredElement(origine.taranaka, "TARANAKA", razambe?.id ?? null);
+  await assertDeclaredElement(origine.sampana, "SAMPANA", taranaka?.id ?? null);
+}
+
+async function resolveDeclaredElement(level, typeCode, parentId) {
+  if (!originLevelPresent(level)) return null;
+  if (level.id) return assertDeclaredElement(level, typeCode, parentId);
+  const lockKey = `${typeCode}:${parentId ?? "root"}:${level.nom_propose.toLocaleLowerCase()}`;
+  await database.query("SELECT pg_advisory_xact_lock(hashtext($1))", [lockKey]);
+  const matches = await findDeclaredElement(typeCode, parentId, level.nom_propose);
+  if (matches.length > 1) throw businessError("Plusieurs éléments correspondent à cette origine déclarée", "ORIGINE_DECLARATION_AMBIGUOUS");
+  if (matches.length === 1) return matches[0];
+  const typeResult = await database.query("SELECT id FROM type_element WHERE code = $1", [typeCode]);
+  if (!typeResult.rows[0]) throw businessError("Le type d'élément déclaré est introuvable", "ORIGINE_DECLARATION_INVALID");
+  try {
+    return await createElement(new Element({ id_type_element: typeResult.rows[0].id, nom: level.nom_propose, autres_appellations: null, id_sexe: null, nom_conjoint: null, ville_origine_conjoint: null, rattachement_sup: parentId, etat: true }));
+  } catch (error) {
+    if (error.code !== "ELEMENT_DUPLICATE") throw error;
+    const concurrentMatches = await findDeclaredElement(typeCode, parentId, level.nom_propose);
+    if (concurrentMatches.length === 1) return concurrentMatches[0];
+    throw error;
+  }
+}
+
+async function resolveDeclaredOrigin(origine, fallbackId) {
+  if (!origine) return fallbackId;
+  const razambe = await resolveDeclaredElement(origine.razambe, "RAZAMBE", null);
+  const taranaka = await resolveDeclaredElement(origine.taranaka, "TARANAKA", razambe?.id ?? null);
+  const sampana = await resolveDeclaredElement(origine.sampana, "SAMPANA", taranaka?.id ?? null);
+  return sampana?.id ?? taranaka?.id ?? razambe?.id ?? fallbackId;
+}
 async function validateDonneesReferences(donnees) {
   if (!donnees.personne) return;
+
+  await validateDeclaredOriginReferences(donnees.origine_declaree);
 
   await Promise.all([
     validateReferences("sexe", [donnees.personne.id_sexe], "Référence de sexe"),
@@ -758,6 +870,10 @@ function getNormalizedStoredDraft(donnees) {
 async function createPersonneDepuisBrouillon(demande) {
   const donnees = getNormalizedStoredDraft(demande.donnees);
   const personne = donnees.personne;
+  const idElement = await resolveDeclaredOrigin(
+    donnees.origine_declaree,
+    personne.id_element,
+  );
   const statut = await getStatutPersonne(personne.id_statut);
   const estDecede = statut.code === "DECEDE";
 
@@ -798,7 +914,7 @@ async function createPersonneDepuisBrouillon(demande) {
       personne.adresse,
       personne.id_ville,
       personne.id_lien,
-      personne.id_element,
+      idElement,
     ],
   );
   const idPersonne = personneResult.rows[0].id;

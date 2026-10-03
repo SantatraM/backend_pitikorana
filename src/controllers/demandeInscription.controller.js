@@ -46,7 +46,12 @@ function handleTreatmentError(error, res) {
   if (error.code === "DEMANDE_NOT_FOUND") {
     return res.status(404).json({ success: false, message: error.message });
   }
-  if (error.code === "DEMANDE_NOT_PENDING") {
+  if (["ORIGINE_DECLARATION_INVALID", "DRAFT_FK_NOT_FOUND"].includes(error.code)) {
+    return res.status(400).json({ success: false, code: error.code, message: error.message });
+  }
+  if (["ORIGINE_DECLARATION_AMBIGUOUS", "ELEMENT_DUPLICATE"].includes(error.code)) {
+    return res.status(409).json({ success: false, code: error.code, message: error.message });
+  }  if (error.code === "DEMANDE_NOT_PENDING") {
     return res.status(409).json({ success: false, message: error.message });
   }
   if (error.code === "DRAFT_INVALID" || !error.code) {
