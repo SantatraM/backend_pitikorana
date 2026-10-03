@@ -45,8 +45,15 @@ export default {
               .map(normalizeWebPhotoFile)
               .filter(Boolean);
           }
+          const expressHeaders = new Headers(request.headers);
+          // Le corps multipart a déjà été consommé par formData(). Conserver
+          // notamment Cookie et Origin pour Express, sans les métadonnées du
+          // corps original qui ne lui est plus transmis.
+          expressHeaders.delete("content-length");
+          expressHeaders.delete("content-type");
           expressRequest = new Request(request.url, {
             method: request.method,
+            headers: expressHeaders,
           });
         } catch {
           uploadFormDataError = true;
