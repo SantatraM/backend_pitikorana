@@ -483,7 +483,7 @@ async function propagateConjointParentsInTransaction({
   return [...affectedChildren];
 }
 
-async function reconcileFamilyInTransaction({ personneIds, idCompteCreateur }) {
+export async function reconcileFamilyInTransaction({ personneIds, idCompteCreateur }) {
   const affectedPersonIds = new Set(personneIds.filter(Boolean));
   const initialParentRelations = await getParentRelationsForChildrenInTransaction(
     [...affectedPersonIds],
@@ -707,6 +707,7 @@ export async function createRelationPersonneInTransaction(
   relation,
   lang = "fr",
   auth = null,
+  { reconcile = true } = {},
 ) {
     if (relation.id_personne_source === relation.id_personne_cible) {
       throw businessError(
@@ -798,13 +799,15 @@ export async function createRelationPersonneInTransaction(
     }
 
     const relationId = direct.rows[0].id;
-    await reconcileFamilyInTransaction({
-      personneIds: [
-        relation.id_personne_source,
-        relation.id_personne_cible,
-      ],
-      idCompteCreateur: auth.compte.id,
-    });
+    if (reconcile) {
+      await reconcileFamilyInTransaction({
+        personneIds: [
+          relation.id_personne_source,
+          relation.id_personne_cible,
+        ],
+        idCompteCreateur: auth.compte.id,
+      });
+    }
     return getRelationPersonneById(relationId, lang);
 }
 

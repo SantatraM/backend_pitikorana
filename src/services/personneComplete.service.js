@@ -10,7 +10,10 @@ import { createContactPersonne } from "./contactsPersonne.service.js";
 import { createPersonneActivite } from "./personneActivite.service.js";
 import { createPersonneCompetence } from "./personneCompetence.service.js";
 import { createPersonneCentreInteret } from "./personneCentreInteret.service.js";
-import { createRelationPersonneInTransaction } from "./relationPersonne.service.js";
+import {
+  createRelationPersonneInTransaction,
+  reconcileFamilyInTransaction,
+} from "./relationPersonne.service.js";
 import { assertCanManagePersonne } from "./personneAuthorization.service.js";
 import {
   CHAMPS_CONFIDENTIELS,
@@ -242,18 +245,27 @@ export async function updatePersonneComplete(idPersonne, body, lang = "fr", auth
       "DELETE FROM relation_personne WHERE id_personne_source = $1 OR id_personne_cible = $1",
       [idPersonne],
     );
+    const relationPersonneIds = new Set([idPersonne]);
     for (const relation of relations) {
       const item = object(relation, "Relation");
+      const idPersonneLiee = uuid(item.id_personne_liee, "Personne liée");
+      relationPersonneIds.add(idPersonneLiee);
       await createRelationPersonneInTransaction(
         new RelationPersonne({
           id_personne_source: idPersonne,
-          id_personne_cible: uuid(item.id_personne_liee, "Personne liée"),
+          id_personne_cible: idPersonneLiee,
           id_type_relation: uuid(item.id_type_relation, "Type de relation"),
         }),
         lang,
         auth,
+        { reconcile: false },
       );
     }
+
+    await reconcileFamilyInTransaction({
+      personneIds: [...relationPersonneIds],
+      idCompteCreateur: auth.compte.id,
+    });
 
     await database.query("DELETE FROM personne_activite WHERE id_personne = $1", [idPersonne]);
     for (const activite of activites) {
