@@ -259,7 +259,8 @@ async function getFratrieGroupInTransaction(personneId) {
         END = ANY(g.chemin)
       )
     )
-    SELECT DISTINCT id FROM groupe`,
+    SELECT DISTINCT id FROM groupe
+    ORDER BY id`,
     [personneId],
   );
   const memberIds = membersResult.rows.map((row) => row.id);
@@ -270,7 +271,8 @@ async function getFratrieGroupInTransaction(personneId) {
     JOIN type_relation tr ON tr.id = r.id_type_relation
     WHERE tr.code = 'FRATRIE'
       AND r.id_personne_source = ANY($1::uuid[])
-      AND r.id_personne_cible = ANY($1::uuid[])`,
+      AND r.id_personne_cible = ANY($1::uuid[])
+    ORDER BY r.id ASC`,
     [memberIds],
   );
 
@@ -343,6 +345,176 @@ async function getTypeRelationByCode(code) {
   return result.rows[0] ?? null;
 }
 
+async function getParentRelationsForChildrenInTransaction(childIds) {
+  if (!childIds.length) return [];
+
+  const result = await database.query(
+    `SELECT r.id, r.id_personne_source AS id_enfant, r.id_personne_cible AS id_parent
+    FROM relation_personne r
+    JOIN type_relation tr ON tr.id = r.id_type_relation
+    WHERE tr.code = 'PARENT'
+      AND r.id_personne_source = ANY($1::uuid[])`,
+    [childIds],
+  );
+  return result.rows;
+}
+
+function assertValidParentCount(parentRelations) {
+  const parentsByChild = new Map();
+  for (const relation of parentRelations) {
+    if (!parentsByChild.has(relation.id_enfant)) {
+      parentsByChild.set(relation.id_enfant, new Set());
+    }
+    parentsByChild.get(relation.id_enfant).add(relation.id_parent);
+  }
+
+  for (const parents of parentsByChild.values()) {
+    if (parents.size > 2) {
+      throw businessError(
+        "Un enfant ne peut pas posséder plus de deux parents dans sa famille déclarée",
+        "FAMILY_PROPAGATION_CONFLICT",
+      );
+    }
+  }
+}
+
+async function getConjointPairsForPersonnesInTransaction(personneIds) {
+  if (!personneIds.length) return [];
+
+  const result = await database.query(
+    `SELECT r.id, r.id_personne_source, r.id_personne_cible
+    FROM relation_personne r
+    JOIN type_relation tr ON tr.id = r.id_type_relation
+    WHERE tr.code = 'CONJOINT'
+      AND (
+        r.id_personne_source = ANY($1::uuid[])
+        OR r.id_personne_cible = ANY($1::uuid[])
+      )
+    ORDER BY r.id ASC`,
+    [personneIds],
+  );
+
+  // Une union est persistée dans les deux sens. Une seule relation suffit
+  // comme justification de la règle de parenté dérivée.
+  const pairs = new Map();
+  for (const relation of result.rows) {
+    const key = [relation.id_personne_source, relation.id_personne_cible]
+      .sort()
+      .join(":");
+    if (!pairs.has(key)) pairs.set(key, relation);
+  }
+  return [...pairs.values()];
+}
+
+async function getChildrenOfParentInTransaction(parentId) {
+  const result = await database.query(
+    `SELECT r.id_personne_source
+    FROM relation_personne r
+    JOIN type_relation tr ON tr.id = r.id_type_relation
+    WHERE tr.code = 'PARENT'
+      AND r.id_personne_cible = $1`,
+    [parentId],
+  );
+  return result.rows.map((row) => row.id_personne_source);
+}
+
+async function propagateConjointParentsInTransaction({
+  personneIds,
+  idCompteCreateur,
+}) {
+  const uniquePersonneIds = [...new Set(personneIds.filter(Boolean))];
+  if (!uniquePersonneIds.length) return [];
+
+  const parentType = await getTypeRelationByCode("PARENT");
+  if (!parentType?.id_inverse_defaut) {
+    throw businessError(
+      "Les types de relation nécessaires ne sont pas correctement configurés",
+      "INVERSE_NOT_CONFIGURED",
+    );
+  }
+
+  const conjointPairs = await getConjointPairsForPersonnesInTransaction(
+    uniquePersonneIds,
+  );
+  const affectedChildren = new Set();
+
+  for (const conjoint of conjointPairs) {
+    for (const [parentId, conjointId] of [
+      [conjoint.id_personne_source, conjoint.id_personne_cible],
+      [conjoint.id_personne_cible, conjoint.id_personne_source],
+    ]) {
+      const childIds = await getChildrenOfParentInTransaction(parentId);
+      const parentRelations = await getParentRelationsForChildrenInTransaction(
+        childIds,
+      );
+      const parentRelationsByChild = new Map();
+      for (const relation of parentRelations) {
+        if (!parentRelationsByChild.has(relation.id_enfant)) {
+          parentRelationsByChild.set(relation.id_enfant, []);
+        }
+        parentRelationsByChild.get(relation.id_enfant).push(relation);
+      }
+
+      for (const [childId, childParents] of parentRelationsByChild) {
+        affectedChildren.add(childId);
+        assertValidParentCount(childParents);
+
+        // Un conjoint ne complète que le parent manquant : il ne remplace
+        // jamais un second parent déjà déclaré.
+        if (
+          childParents.length !== 1 ||
+          childParents[0].id_parent !== parentId
+        ) {
+          continue;
+        }
+
+        await ensureAutoRelationInTransaction({
+          sourceId: childId,
+          cibleId: conjointId,
+          typeId: parentType.id,
+          inverseTypeId: parentType.id_inverse_defaut,
+          justificationIds: [childParents[0].id, conjoint.id],
+          idCompteCreateur,
+        });
+      }
+    }
+  }
+
+  return [...affectedChildren];
+}
+
+async function reconcileFamilyInTransaction({ personneIds, idCompteCreateur }) {
+  const affectedPersonIds = new Set(personneIds.filter(Boolean));
+  const initialParentRelations = await getParentRelationsForChildrenInTransaction(
+    [...affectedPersonIds],
+  );
+  assertValidParentCount(initialParentRelations);
+
+  // Une relation PARENT/ENFANT peut révéler le conjoint d'un parent sans que
+  // ce parent soit lui-même l'une des deux personnes de la relation saisie.
+  for (const relation of initialParentRelations) {
+    affectedPersonIds.add(relation.id_parent);
+  }
+
+  const conjointChildren = await propagateConjointParentsInTransaction({
+    personneIds: [...affectedPersonIds],
+    idCompteCreateur,
+  });
+  for (const childId of conjointChildren) affectedPersonIds.add(childId);
+
+  const reconciledGroups = new Set();
+  for (const personneId of affectedPersonIds) {
+    const { memberIds } = await getFratrieGroupInTransaction(personneId);
+    const groupKey = [...memberIds].sort().join(":");
+    if (reconciledGroups.has(groupKey)) continue;
+    reconciledGroups.add(groupKey);
+
+    await propagateFratrieGroupInTransaction({
+      personneId,
+      idCompteCreateur,
+    });
+  }
+}
 async function propagateFratrieGroupInTransaction({
   personneId,
   idCompteCreateur,
@@ -364,7 +536,22 @@ async function propagateFratrieGroupInTransaction({
     parentRelationIds.set(`${row.id_enfant}:${row.id_parent}`, row.id);
   }
 
+  for (const parents of parentsByMember.values()) {
+    if (parents.size > 2) {
+      throw businessError(
+        "Un enfant ne peut pas posséder plus de deux parents dans sa famille déclarée",
+        "FAMILY_PROPAGATION_CONFLICT",
+      );
+    }
+  }
+
   const coherentParents = getCoherentParentSet(parentsByMember);
+  if (coherentParents.size > 2) {
+    throw businessError(
+      "Un enfant ne peut pas posséder plus de deux parents dans sa famille déclarée",
+      "FAMILY_PROPAGATION_CONFLICT",
+    );
+  }
   const [parentType, fratrieType] = await Promise.all([
     getTypeRelationByCode("PARENT"),
     getTypeRelationByCode("FRATRIE"),
@@ -424,15 +611,10 @@ async function propagateFratrieGroupInTransaction({
       });
     }
   }
+
+  return memberIds;
 }
 
-async function propagateFratrieInTransaction(triggerRelationId, auth) {
-  const trigger = await getRelationRawById(triggerRelationId);
-  return propagateFratrieGroupInTransaction({
-    personneId: trigger.id_personne_source,
-    idCompteCreateur: auth.compte.id,
-  });
-}
 
 export async function backfillFratrieGroup(personneId) {
   return database.transaction(() =>
@@ -616,9 +798,13 @@ export async function createRelationPersonneInTransaction(
     }
 
     const relationId = direct.rows[0].id;
-    if (typeRelation.code === "FRATRIE") {
-      await propagateFratrieInTransaction(relationId, auth);
-    }
+    await reconcileFamilyInTransaction({
+      personneIds: [
+        relation.id_personne_source,
+        relation.id_personne_cible,
+      ],
+      idCompteCreateur: auth.compte.id,
+    });
     return getRelationPersonneById(relationId, lang);
 }
 
