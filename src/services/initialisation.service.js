@@ -2,7 +2,7 @@ import { timingSafeEqual } from "node:crypto";
 import database from "../config/db.js";
 import { getRequestContext } from "../config/requestContext.js";
 import { createSupabaseAdminClient } from "../lib/supabaseAdmin.js";
-import { normalizeEtValiderDonneesNouvellePersonne } from "./demandeInscription.service.js";
+import { normalizeEtValiderDonneesPremierAdminSansPhoto } from "./demandeInscription.service.js";
 import { normalizeTelephonePourAuth } from "../utils/telephoneAuth.js";
 
 const UUID_PATTERN =
@@ -283,7 +283,7 @@ export async function creerPremierAdmin(body, providedSecret) {
   const input = normalizeBootstrapBody(body);
   const donnees =
     input.mode === "NOUVELLE"
-      ? await normalizeEtValiderDonneesNouvellePersonne(input.donnees)
+      ? await normalizeEtValiderDonneesPremierAdminSansPhoto(input.donnees)
       : null;
   let authUser = null;
 

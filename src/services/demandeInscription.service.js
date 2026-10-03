@@ -348,17 +348,18 @@ function normalizeCentreInteretDraft(value) {
   };
 }
 
-function normalizeDonnees(value, hasExistingPersonne) {
+function normalizeDonnees(value, hasExistingPersonne, { allowMissingPhoto = false } = {}) {
   const donnees = value === undefined ? {} : value;
   assertPlainObject(donnees, "Les données de profil sont invalides");
   assertAllowedFields(donnees, DRAFT_ROOT_FIELDS, "Champ de données non autorisé");
 
-  if (!Object.hasOwn(donnees, "photo_temporaire")) {
+  const hasPhotoTemporaire = Object.hasOwn(donnees, "photo_temporaire");
+  if (!hasPhotoTemporaire && (!allowMissingPhoto || hasExistingPersonne)) {
     throw businessError("La photo est obligatoire", "PHOTO_REQUIRED");
   }
-  const photo_temporaire = normalizeTemporaryDemandePhotoPath(
-    donnees.photo_temporaire,
-  );
+  const photo_temporaire = hasPhotoTemporaire
+    ? normalizeTemporaryDemandePhotoPath(donnees.photo_temporaire)
+    : null;
 
   if (hasExistingPersonne) {
     if (Object.keys(donnees).some((key) => key !== "photo_temporaire")) {
@@ -644,6 +645,12 @@ async function validateDonneesReferences(donnees) {
 
 export async function normalizeEtValiderDonneesNouvellePersonne(donnees) {
   const normalized = normalizeDonnees(donnees, false);
+  await validateDonneesReferences(normalized);
+  return normalized;
+}
+
+export async function normalizeEtValiderDonneesPremierAdminSansPhoto(donnees) {
+  const normalized = normalizeDonnees(donnees, false, { allowMissingPhoto: true });
   await validateDonneesReferences(normalized);
   return normalized;
 }
