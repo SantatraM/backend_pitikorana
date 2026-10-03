@@ -9,6 +9,7 @@ import {
   conjoints,
   famille,
   foyer,
+  foyerFormePreview,
   foyerPersistant,
   element,
   descendants,
@@ -32,6 +33,7 @@ r.get("/:id/fratrie", optionalAuth, fratrie);
 r.get("/:id/conjoints", optionalAuth, conjoints);
 r.get("/:id/famille", optionalAuth, famille);
 r.get("/:id/foyer", optionalAuth, foyer);
+r.get("/:id/foyer-forme", requireAuth, foyerFormePreview);
 r.get("/:id/foyer-persistant", requireAuth, foyerPersistant);
 r.get("/:id/confidentialite", requireAuth, getConfidentialite);
 r.put("/:id/confidentialite", requireAuth, updateConfidentialite);

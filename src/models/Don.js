@@ -61,6 +61,16 @@ export default class Don {
 
     this.type_donateur = payload.type_donateur;
     this.id_donateur = payload.id_donateur.toLowerCase();
+    this.id_personne_representante = null;
+    if (payload.type_donateur === "FOYER" && payload.id_personne_representante !== undefined) {
+      if (typeof payload.id_personne_representante !== "string" || !UUID_PATTERN.test(payload.id_personne_representante)) {
+        throw businessError("La personne représentante du foyer est invalide.", "DON_DONATEUR_INVALID");
+      }
+      this.id_personne_representante = payload.id_personne_representante.toLowerCase();
+      if (this.id_personne_representante !== this.id_donateur) {
+        throw businessError("Le foyer doit être représenté par la personne sélectionnée.", "DON_DONATEUR_INVALID");
+      }
+    }
     this.type_don = payload.type_don;
     this.observation = normalizeOptionalText(payload.observation, "L'observation");
 

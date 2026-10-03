@@ -1,5 +1,5 @@
 import database from "../config/db.js";
-import { getFoyerPersonne } from "./personne.service.js";
+import { getFoyerFormePersonne, getFoyerPersonne } from "./personne.service.js";
 
 function businessError(message, code) {
   const error = new Error(message);
@@ -47,7 +47,7 @@ async function canonicalizeCoupleIds(idPersonne1, idPersonne2) {
   return result.rows[0];
 }
 
-async function getOrCreateCouple(idPersonne1, idPersonne2) {
+async function getOrReactivateCouple(idPersonne1, idPersonne2) {
   const inserted = await database.query(
     `INSERT INTO foyer (id_personne_1, id_personne_2, type_foyer)
     VALUES ($1, $2, 'COUPLE')
@@ -59,18 +59,31 @@ async function getOrCreateCouple(idPersonne1, idPersonne2) {
   );
   if (inserted.rows[0]) return inserted.rows[0];
 
+  const reactivated = await database.query(
+    `UPDATE foyer
+    SET statut = 'ACTIF', updated_at = now()
+    WHERE type_foyer = 'COUPLE'
+      AND id_personne_1 = $1
+      AND id_personne_2 = $2
+      AND statut = 'CLOTURE'
+    RETURNING id, id_personne_1, id_personne_2, type_foyer, statut, created_at, updated_at`,
+    [idPersonne1, idPersonne2],
+  );
+  if (reactivated.rows[0]) return reactivated.rows[0];
+
   const existing = await database.query(
     `SELECT id, id_personne_1, id_personne_2, type_foyer, statut, created_at, updated_at
     FROM foyer
     WHERE type_foyer = 'COUPLE'
       AND id_personne_1 = $1
-      AND id_personne_2 = $2`,
+      AND id_personne_2 = $2
+      AND statut = 'ACTIF'`,
     [idPersonne1, idPersonne2],
   );
   return existing.rows[0];
 }
 
-async function getOrCreateMonoparental(idPersonne1) {
+async function getOrReactivateMonoparental(idPersonne1) {
   const inserted = await database.query(
     `INSERT INTO foyer (id_personne_1, type_foyer)
     VALUES ($1, 'MONOPARENTAL')
@@ -82,28 +95,38 @@ async function getOrCreateMonoparental(idPersonne1) {
   );
   if (inserted.rows[0]) return inserted.rows[0];
 
+  const reactivated = await database.query(
+    `UPDATE foyer
+    SET statut = 'ACTIF', updated_at = now()
+    WHERE type_foyer = 'MONOPARENTAL'
+      AND id_personne_1 = $1
+      AND statut = 'CLOTURE'
+    RETURNING id, id_personne_1, id_personne_2, type_foyer, statut, created_at, updated_at`,
+    [idPersonne1],
+  );
+  if (reactivated.rows[0]) return reactivated.rows[0];
+
   const existing = await database.query(
     `SELECT id, id_personne_1, id_personne_2, type_foyer, statut, created_at, updated_at
     FROM foyer
     WHERE type_foyer = 'MONOPARENTAL'
-      AND id_personne_1 = $1`,
+      AND id_personne_1 = $1
+      AND statut = 'ACTIF'`,
     [idPersonne1],
   );
   return existing.rows[0];
 }
 
-export async function getOrCreateFoyer({ typeFoyer, idPersonne1, idPersonne2 = null } = {}) {
+async function getOrCreateFoyerInTransaction({ typeFoyer, idPersonne1, idPersonne2 = null } = {}) {
   const type = normalizeTypeFoyer(typeFoyer);
   const personne1 = normalizePersonneId(idPersonne1, 1);
 
-  if (type === 'MONOPARENTAL') {
+  if (type === "MONOPARENTAL") {
     if (idPersonne2 !== null && idPersonne2 !== undefined) {
       throw businessError("Un foyer monoparental ne peut avoir qu'une personne fondatrice", "FOYER_STRUCTURE_INVALID");
     }
-    return database.transaction(async () => {
-      await verifyPersonnesExist(personne1);
-      return getOrCreateMonoparental(personne1);
-    });
+    await verifyPersonnesExist(personne1);
+    return getOrReactivateMonoparental(personne1);
   }
 
   const personne2 = normalizePersonneId(idPersonne2, 2);
@@ -111,11 +134,68 @@ export async function getOrCreateFoyer({ typeFoyer, idPersonne1, idPersonne2 = n
     throw businessError("Un foyer de couple nécessite deux personnes distinctes", "FOYER_PERSONNES_IDENTIQUES");
   }
 
-  return database.transaction(async () => {
-    const couple = await canonicalizeCoupleIds(personne1, personne2);
-    await verifyPersonnesExist(couple.id_personne_1, couple.id_personne_2);
-    return getOrCreateCouple(couple.id_personne_1, couple.id_personne_2);
-  });
+  const couple = await canonicalizeCoupleIds(personne1, personne2);
+  await verifyPersonnesExist(couple.id_personne_1, couple.id_personne_2);
+  return getOrReactivateCouple(couple.id_personne_1, couple.id_personne_2);
+}
+
+export async function getOrCreateFoyer(options = {}) {
+  return database.transaction(() => getOrCreateFoyerInTransaction(options));
+}
+
+export async function getFoyerFormePreview(personneId) {
+  const foyerForme = await getFoyerFormePersonne(personneId);
+  if (!foyerForme) return null;
+
+  return {
+    type_foyer: foyerForme.type_foyer,
+    personnes: foyerForme.conjoint
+      ? [foyerForme.personne, foyerForme.conjoint]
+      : [foyerForme.personne],
+  };
+}
+
+async function closeOtherActiveFoyersForPersonne(personneId, idFoyerConserve) {
+  await database.query(
+    `UPDATE foyer
+    SET statut = 'CLOTURE', updated_at = now()
+    WHERE statut = 'ACTIF'
+      AND id <> $2
+      AND (id_personne_1 = $1 OR id_personne_2 = $1)`,
+    [personneId, idFoyerConserve],
+  );
+}
+
+export async function resolveOrCreatePersistentFoyerInTransaction({ personneId } = {}) {
+  const personne = normalizePersonneId(personneId, 1);
+  const foyerForme = await getFoyerFormePersonne(personne);
+  if (!foyerForme) {
+    throw businessError(
+      "Cette personne ne possède pas de foyer formé résoluble.",
+      "FOYER_NOT_RESOLVABLE",
+    );
+  }
+
+  const foyer = foyerForme.type_foyer === "COUPLE"
+    ? await getOrCreateFoyerInTransaction({
+      typeFoyer: "COUPLE",
+      idPersonne1: foyerForme.personne.id,
+      idPersonne2: foyerForme.conjoint.id,
+    })
+    : await getOrCreateFoyerInTransaction({
+      typeFoyer: "MONOPARENTAL",
+      idPersonne1: foyerForme.personne.id,
+    });
+
+  const personnesDuFoyer = [
+    foyerForme.personne.id,
+    ...(foyerForme.conjoint ? [foyerForme.conjoint.id] : []),
+  ];
+  const personnesOrdonnees = [...new Set(personnesDuFoyer)].sort();
+  for (const idPersonne of personnesOrdonnees) {
+    await closeOtherActiveFoyersForPersonne(idPersonne, foyer.id);
+  }
+  return foyer;
 }
 
 function normalizeContexte(value) {
@@ -127,39 +207,28 @@ function normalizeContexte(value) {
 
 export async function resolveOrCreatePersistentFoyer({ personneId, contexte } = {}) {
   const contexteNormalise = normalizeContexte(contexte);
-  const foyerCalcule = await getFoyerPersonne(personneId);
 
+  if (contexteNormalise === "FORME") {
+    return database.transaction(() => resolveOrCreatePersistentFoyerInTransaction({ personneId }));
+  }
+
+  const foyerCalcule = await getFoyerPersonne(personneId);
   if (!foyerCalcule) {
     throw businessError("Personne introuvable", "FOYER_PERSONNE_NOT_FOUND");
   }
 
-  if (contexteNormalise === "ORIGINE") {
-    const foyerOrigine = foyerCalcule.foyer_origine;
-    if (foyerOrigine?.statut !== "COMPLET" || foyerOrigine.parents.length !== 2) {
-      throw businessError(
-        "Le foyer d'origine n'est pas suffisamment établi pour être persisté",
-        "FOYER_NOT_RESOLVABLE",
-      );
-    }
-    return getOrCreateFoyer({
-      typeFoyer: "COUPLE",
-      idPersonne1: foyerOrigine.parents[0].id,
-      idPersonne2: foyerOrigine.parents[1].id,
-    });
-  }
-
-  const foyerForme = foyerCalcule.foyer_forme;
-  if (foyerForme?.statut !== "COMPLET" || !foyerForme.conjoint?.id) {
+  const foyerOrigine = foyerCalcule.foyer_origine;
+  if (foyerOrigine?.statut !== "COMPLET" || foyerOrigine.parents.length !== 2) {
     throw businessError(
-      "Le foyer formé n'est pas suffisamment établi pour être persisté",
+      "Le foyer d'origine n'est pas suffisamment établi pour être persisté",
       "FOYER_NOT_RESOLVABLE",
     );
   }
 
   return getOrCreateFoyer({
     typeFoyer: "COUPLE",
-    idPersonne1: foyerCalcule.personne.id,
-    idPersonne2: foyerForme.conjoint.id,
+    idPersonne1: foyerOrigine.parents[0].id,
+    idPersonne2: foyerOrigine.parents[1].id,
   });
 }
 

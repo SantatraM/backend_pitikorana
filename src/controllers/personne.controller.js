@@ -1,6 +1,6 @@
 import Personne from "../models/Personne.js";
 import * as s from "../services/personne.service.js";
-import { getPersistentFoyerByPersonne } from "../services/foyer.service.js";
+import { getFoyerFormePreview, getPersistentFoyerByPersonne } from "../services/foyer.service.js";
 import {
   getPreferencesConfidentialitePersonne,
   updatePreferencesConfidentialitePersonne,
@@ -154,6 +154,26 @@ export async function foyer(q, r) {
       : r.status(404).json({ success: false, message: "Personne introuvable" });
   } catch (e) {
     if (["FOYER_PARENT_CONFLICT", "FOYER_CONJOINT_CONFLICT"].includes(e.code)) {
+      return r.status(409).json({ success: false, message: e.message });
+    }
+    console.error(e);
+    return r.status(500).json({ success: false, message: "Erreur serveur" });
+  }
+}
+export async function foyerFormePreview(q, r) {
+  if (!re.test(q.params.id)) return bad(r);
+  try {
+    const resultat = await getFoyerFormePreview(q.params.id);
+    return r.json({
+      success: true,
+      data: resultat,
+      message: resultat ? undefined : "Aucun foyer formé résoluble pour cette personne.",
+    });
+  } catch (e) {
+    if (e.code === "FOYER_PERSONNE_INVALID" || e.code === "FOYER_PERSONNE_NOT_FOUND") {
+      return r.status(404).json({ success: false, message: e.message });
+    }
+    if (e.code === "FOYER_CONJOINT_CONFLICT") {
       return r.status(409).json({ success: false, message: e.message });
     }
     console.error(e);

@@ -1,5 +1,6 @@
 import database from "../config/db.js";
 import Don from "../models/Don.js";
+import { resolveOrCreatePersistentFoyerInTransaction } from "./foyer.service.js";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -117,7 +118,7 @@ async function resolvePersonneRattachement(idPersonne) {
   };
 }
 
-async function resolveDonateur(typeDonateur, idDonateur) {
+async function resolveDonateur(typeDonateur, idDonateur, idPersonneRepresentante = null) {
   const id = normalizeUuid(idDonateur, "DON_DONATEUR_INVALID", "L'identifiant du donateur est invalide.");
 
   if (typeDonateur === "TARANAKA") {
@@ -143,9 +144,13 @@ async function resolveDonateur(typeDonateur, idDonateur) {
     throw businessError("Le type de donateur est invalide.", "DON_DONATEUR_INVALID");
   }
 
+  const foyerId = idPersonneRepresentante
+    ? (await resolveOrCreatePersistentFoyerInTransaction({ personneId: idPersonneRepresentante })).id
+    : id;
   const foyerResult = await database.query(
-    `SELECT id, id_personne_1, id_personne_2, type_foyer, statut FROM foyer WHERE id = $1`,
-    [id],
+    `SELECT id, id_personne_1, id_personne_2, type_foyer, statut
+    FROM foyer WHERE id = $1 AND statut = 'ACTIF'`,
+    [foyerId],
   );
   const foyer = foyerResult.rows[0];
   if (!foyer) throw businessError("Foyer donateur introuvable.", "DON_FOYER_NOT_FOUND");
@@ -266,7 +271,7 @@ export async function createDon(idJournee, payload, idCompteCreateur) {
 
   return database.transaction(async () => {
     await getJourneeForWrite(journeeId);
-    const resolved = await resolveDonateur(don.type_donateur, don.id_donateur);
+    const resolved = await resolveDonateur(don.type_donateur, don.id_donateur, don.id_personne_representante);
     await assertEligibleForJournee(journeeId, resolved.id_taranaka_snapshot);
 
     const result = await database.query(
@@ -319,7 +324,7 @@ export async function updateDon(idJournee, idDon, payload, idCompteModificateur)
     if (!current) throw businessError("Don introuvable.", "DON_NOT_FOUND");
     if (current.statut !== "VALIDE") throw businessError("Un don annulé ne peut pas être modifié.", "DON_ALREADY_CANCELLED");
 
-    const resolved = await resolveDonateur(don.type_donateur, don.id_donateur);
+    const resolved = await resolveDonateur(don.type_donateur, don.id_donateur, don.id_personne_representante);
     await assertEligibleForJournee(journeeId, resolved.id_taranaka_snapshot);
 
     await database.query(

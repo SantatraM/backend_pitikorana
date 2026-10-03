@@ -444,9 +444,10 @@ export async function getFoyerPersonne(id) {
   const personne = await getPersonneGenealogique(id);
   if (!personne) return null;
 
-  const [parents, conjoints] = await Promise.all([
+  const [parents, conjoints, enfants] = await Promise.all([
     getPersonnesLieesDirectes(id, "PARENT"),
     getConjointsFoyer(id),
+    getPersonnesLieesDirectes(id, "ENFANT"),
   ]);
 
   if (parents.length > 2) {
@@ -481,12 +482,28 @@ export async function getFoyerPersonne(id) {
     };
   }
 
-  let foyerForme = null;
+  const foyerForme = await buildFoyerForme(personne, conjoints, enfants);
+
+  return {
+    personne,
+    foyer_origine: foyerOrigine,
+    foyer_forme: foyerForme,
+  };
+}
+async function buildFoyerForme(personne, conjoints, enfants) {
+  if (conjoints.length > 1) {
+    throw foyerError(
+      "Cette personne possède plus d'un conjoint enregistré.",
+      "FOYER_CONJOINT_CONFLICT",
+    );
+  }
+
   if (conjoints.length === 1) {
     const conjoint = conjoints[0];
     const parentIds = [personne.id, conjoint.id].sort();
-    foyerForme = {
+    return {
       statut: "COMPLET",
+      type_foyer: "COUPLE",
       identite: { parents: parentIds },
       personne,
       conjoint,
@@ -494,11 +511,32 @@ export async function getFoyerPersonne(id) {
     };
   }
 
-  return {
-    personne,
-    foyer_origine: foyerOrigine,
-    foyer_forme: foyerForme,
-  };
+  if (enfants.length > 0) {
+    return {
+      statut: "COMPLET",
+      type_foyer: "MONOPARENTAL",
+      identite: { parents: [personne.id] },
+      personne,
+      conjoint: null,
+      enfants,
+    };
+  }
+
+  return null;
+}
+
+export async function getFoyerFormePersonne(id) {
+  validatePersonneId(id);
+
+  const personne = await getPersonneGenealogique(id);
+  if (!personne) return null;
+
+  const [conjoints, enfants] = await Promise.all([
+    getConjointsFoyer(id),
+    getPersonnesLieesDirectes(id, "ENFANT"),
+  ]);
+
+  return buildFoyerForme(personne, conjoints, enfants);
 }
 export async function getFamillePersonne(id) {
   validatePersonneId(id);
