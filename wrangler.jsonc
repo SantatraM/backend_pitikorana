@@ -6,6 +6,11 @@
 	"compatibility_flags": [
 		"nodejs_compat"
 	],
+	"vars": {
+		"NODE_ENV": "production",
+		"FRONTEND_URL": "https://pitikorana.santatryn.workers.dev",
+		"AUTH_COOKIE_SECURE": "true"
+	},
 	"hyperdrive": [
 		{
 			"binding": "HYPERDRIVE",
