@@ -14,6 +14,7 @@ function mapRelationRow(row) {
     id_personne_source: row.id_personne_source,
     id_personne_cible: row.id_personne_cible,
     id_type_relation: row.id_type_relation,
+    origine: row.origine,
     personne_source: row.id_personne_source
       ? {
           id: row.id_personne_source,
@@ -46,6 +47,7 @@ const relationSelect = `
     r.id_personne_source,
     r.id_personne_cible,
     r.id_type_relation,
+    r.origine,
     source.nom AS nom_personne_source,
     source.prenom AS prenom_personne_source,
     sexe_source.code AS code_sexe_personne_source,
@@ -483,7 +485,7 @@ async function propagateConjointParentsInTransaction({
   return [...affectedChildren];
 }
 
-export async function reconcileFamilyInTransaction({ personneIds, idCompteCreateur }) {
+async function reconcileFamilyLegacyInTransaction({ personneIds, idCompteCreateur }) {
   const affectedPersonIds = new Set(personneIds.filter(Boolean));
   const initialParentRelations = await getParentRelationsForChildrenInTransaction(
     [...affectedPersonIds],
@@ -625,10 +627,442 @@ export async function backfillFratrieGroup(personneId) {
   );
 }
 
+const FAMILY_CODES = new Set(["PARENT", "ENFANT", "CONJOINT", "FRATRIE"]);
+const MAX_RECONCILIATION_ITERATIONS = 64;
+
+function familyRelationKey(sourceId, cibleId) {
+  return `${sourceId}:${cibleId}`;
+}
+
+function relationProofKey(keys) {
+  return [...new Set(keys)].sort().join("|");
+}
+
+async function getFamilyTypesInTransaction() {
+  const result = await database.query(
+    `SELECT id, code, id_inverse_defaut
+     FROM type_relation
+     WHERE code = ANY($1::text[])`,
+    [[...FAMILY_CODES]],
+  );
+  const byCode = new Map(result.rows.map((row) => [row.code, row]));
+  if (byCode.size !== FAMILY_CODES.size) {
+    throw businessError(
+      "Les types de relation nécessaires ne sont pas correctement configurés",
+      "INVERSE_NOT_CONFIGURED",
+    );
+  }
+  const byId = new Map(result.rows.map((row) => [row.id, row]));
+  for (const type of result.rows) {
+    if (!type.id_inverse_defaut || !byId.has(type.id_inverse_defaut)) {
+      throw businessError(
+        "Les types de relation nécessaires ne sont pas correctement configurés",
+        "INVERSE_NOT_CONFIGURED",
+      );
+    }
+  }
+  return { byCode, byId };
+}
+
+async function getConnectedFamilyPersonIds(seedIds) {
+  const seeds = [...new Set(seedIds.filter(Boolean))].sort();
+  if (!seeds.length) return [];
+  const result = await database.query(
+    `WITH RECURSIVE component(id, path) AS (
+      SELECT seed.id, ARRAY[seed.id]
+      FROM unnest($1::uuid[]) AS seed(id)
+      UNION ALL
+      SELECT
+        CASE WHEN r.id_personne_source = component.id
+          THEN r.id_personne_cible ELSE r.id_personne_source END,
+        component.path || CASE WHEN r.id_personne_source = component.id
+          THEN r.id_personne_cible ELSE r.id_personne_source END
+      FROM component
+      JOIN relation_personne r
+        ON r.id_personne_source = component.id OR r.id_personne_cible = component.id
+      JOIN type_relation tr ON tr.id = r.id_type_relation
+      WHERE tr.code = ANY($2::text[])
+        AND NOT (CASE WHEN r.id_personne_source = component.id
+          THEN r.id_personne_cible ELSE r.id_personne_source END = ANY(component.path))
+    )
+    SELECT DISTINCT id FROM component ORDER BY id`,
+    [seeds, [...FAMILY_CODES]],
+  );
+  return result.rows.map((row) => row.id);
+}
+
+async function lockFamilyComponentInTransaction(seedIds) {
+  let ids = [...new Set(seedIds.filter(Boolean))].sort();
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const componentIds = await getConnectedFamilyPersonIds(ids);
+    const nextIds = [...new Set([...ids, ...componentIds])].sort();
+    await database.query(
+      `SELECT id FROM personne WHERE id = ANY($1::uuid[]) ORDER BY id FOR UPDATE`,
+      [nextIds],
+    );
+    const stableIds = await getConnectedFamilyPersonIds(nextIds);
+    const merged = [...new Set([...nextIds, ...stableIds])].sort();
+    if (merged.length === nextIds.length && merged.every((id, index) => id === nextIds[index])) {
+      return merged;
+    }
+    ids = merged;
+  }
+  throw businessError(
+    "Le composant familial a changé pendant sa réconciliation",
+    "FAMILY_PROPAGATION_CONFLICT",
+  );
+}
+
+async function getFamilyRelationsForPersonIds(personIds) {
+  if (!personIds.length) return [];
+  const result = await database.query(
+    `SELECT
+      r.id,
+      r.id_personne_source,
+      r.id_personne_cible,
+      r.id_type_relation,
+      r.id_compte_createur,
+      r.origine,
+      tr.code
+    FROM relation_personne r
+    JOIN type_relation tr ON tr.id = r.id_type_relation
+    WHERE tr.code = ANY($1::text[])
+      AND r.id_personne_source = ANY($2::uuid[])
+      AND r.id_personne_cible = ANY($2::uuid[])
+    ORDER BY r.id`,
+    [[...FAMILY_CODES], personIds],
+  );
+  return result.rows;
+}
+
+async function normalizeManualInversesInTransaction(rows, types, idCompteCreateur) {
+  const byKey = new Map(rows.map((row) => [familyRelationKey(row.id_personne_source, row.id_personne_cible), row]));
+  for (const row of rows.filter((item) => item.origine === "MANUELLE")) {
+    const type = types.byCode.get(row.code);
+    const inverseType = types.byId.get(type.id_inverse_defaut);
+    const inverseKey = familyRelationKey(row.id_personne_cible, row.id_personne_source);
+    const inverse = byKey.get(inverseKey);
+    if (inverse && inverse.code !== inverseType.code) {
+      throw businessError(
+        "Une relation inverse incompatible existe dans la famille",
+        "FAMILY_PROPAGATION_CONFLICT",
+      );
+    }
+    if (inverse?.origine === "AUTO") {
+      await database.query(
+        `UPDATE relation_personne
+         SET origine = 'MANUELLE', date_modification = now()
+         WHERE id = $1`,
+        [inverse.id],
+      );
+      await database.query(
+        "DELETE FROM relation_personne_justification WHERE id_relation = $1",
+        [inverse.id],
+      );
+      inverse.origine = "MANUELLE";
+      continue;
+    }
+    if (inverse) continue;
+
+    const inserted = await database.query(
+      `INSERT INTO relation_personne (
+        id_personne_source, id_personne_cible, id_type_relation,
+        id_compte_createur, origine
+      ) VALUES ($1, $2, $3, $4, 'MANUELLE')
+      RETURNING id`,
+      [row.id_personne_cible, row.id_personne_source, inverseType.id, idCompteCreateur ?? row.id_compte_createur],
+    );
+    byKey.set(inverseKey, {
+      id: inserted.rows[0].id,
+      id_personne_source: row.id_personne_cible,
+      id_personne_cible: row.id_personne_source,
+      id_type_relation: inverseType.id,
+      id_compte_createur: idCompteCreateur ?? row.id_compte_createur,
+      origine: "MANUELLE",
+      code: inverseType.code,
+    });
+  }
+}
+
+function assertCalculatedParentCounts(state) {
+  const parentsByChild = new Map();
+  for (const relation of state.values()) {
+    if (relation.code !== "PARENT") continue;
+    if (!parentsByChild.has(relation.id_personne_source)) {
+      parentsByChild.set(relation.id_personne_source, new Set());
+    }
+    parentsByChild.get(relation.id_personne_source).add(relation.id_personne_cible);
+  }
+  for (const parents of parentsByChild.values()) {
+    if (parents.size > 2) {
+      throw businessError(
+        "Un enfant ne peut pas posséder plus de deux parents dans sa famille déclarée",
+        "FAMILY_PROPAGATION_CONFLICT",
+      );
+    }
+  }
+  return parentsByChild;
+}
+
+function assertCalculatedConjoints(state) {
+  const conjointByPerson = new Map();
+  for (const relation of state.values()) {
+    if (relation.code !== "CONJOINT") continue;
+    if (!conjointByPerson.has(relation.id_personne_source)) {
+      conjointByPerson.set(relation.id_personne_source, new Set());
+    }
+    conjointByPerson.get(relation.id_personne_source).add(relation.id_personne_cible);
+  }
+  for (const conjoints of conjointByPerson.values()) {
+    if (conjoints.size > 1) {
+      throw businessError(
+        "Cette personne possède déjà un conjoint enregistré.",
+        "CONJOINT_ALREADY_EXISTS",
+      );
+    }
+  }
+}
+
+function getCalculatedFratrieGroups(state, personIds) {
+  const adjacency = new Map(personIds.map((id) => [id, new Set()]));
+  for (const relation of state.values()) {
+    if (relation.code !== "FRATRIE") continue;
+    adjacency.get(relation.id_personne_source)?.add(relation.id_personne_cible);
+    adjacency.get(relation.id_personne_cible)?.add(relation.id_personne_source);
+  }
+  const groups = [];
+  const visited = new Set();
+  for (const personId of personIds) {
+    if (visited.has(personId)) continue;
+    const members = [];
+    const queue = [personId];
+    visited.add(personId);
+    while (queue.length) {
+      const current = queue.shift();
+      members.push(current);
+      for (const next of adjacency.get(current) ?? []) {
+        if (!visited.has(next)) {
+          visited.add(next);
+          queue.push(next);
+        }
+      }
+    }
+    groups.push(members.sort());
+  }
+  return groups;
+}
+
+function findFratriePathKeys(state, sourceId, cibleId) {
+  if (sourceId === cibleId) return [];
+  const adjacency = new Map();
+  for (const relation of state.values()) {
+    if (relation.code !== "FRATRIE") continue;
+    const key = familyRelationKey(relation.id_personne_source, relation.id_personne_cible);
+    for (const [from, to] of [[relation.id_personne_source, relation.id_personne_cible], [relation.id_personne_cible, relation.id_personne_source]]) {
+      if (!adjacency.has(from)) adjacency.set(from, []);
+      adjacency.get(from).push({ to, key });
+    }
+  }
+  const queue = [{ id: sourceId, keys: [] }];
+  const visited = new Set([sourceId]);
+  while (queue.length) {
+    const current = queue.shift();
+    for (const next of adjacency.get(current.id) ?? []) {
+      if (visited.has(next.to)) continue;
+      const keys = [...current.keys, next.key];
+      if (next.to === cibleId) return keys;
+      visited.add(next.to);
+      queue.push({ id: next.to, keys });
+    }
+  }
+  return null;
+}
+
+function calculateExpectedAutoRelations({ manualRows, personIds, types }) {
+  const manual = new Map(manualRows.map((row) => [familyRelationKey(row.id_personne_source, row.id_personne_cible), row]));
+  const state = new Map(manual);
+  const expected = new Map();
+
+  function addOne(sourceId, cibleId, code, proofKeys) {
+    const key = familyRelationKey(sourceId, cibleId);
+    const manualRelation = manual.get(key);
+    if (manualRelation && manualRelation.code !== code) {
+      throw businessError("Une relation MANUELLE incompatible occupe déjà cette paire", "FAMILY_PROPAGATION_CONFLICT");
+    }
+    const current = state.get(key);
+    if (current && current.code !== code) {
+      throw businessError("Une relation incompatible existe déjà dans la famille", "FAMILY_PROPAGATION_CONFLICT");
+    }
+    if (manualRelation) return false;
+    const normalizedProof = [...new Set(proofKeys)].sort();
+    const currentExpected = expected.get(key);
+    if (currentExpected) {
+      if (relationProofKey(normalizedProof) < relationProofKey(currentExpected.proofKeys)) {
+        currentExpected.proofKeys = normalizedProof;
+      }
+      return false;
+    }
+    const relation = {
+      id_personne_source: sourceId,
+      id_personne_cible: cibleId,
+      id_type_relation: types.byCode.get(code).id,
+      code,
+      origine: "AUTO",
+    };
+    state.set(key, relation);
+    expected.set(key, { ...relation, proofKeys: normalizedProof });
+    return true;
+  }
+
+  function addPair(sourceId, cibleId, code, proofKeys) {
+    const type = types.byCode.get(code);
+    const inverse = types.byId.get(type.id_inverse_defaut);
+    const directAdded = addOne(sourceId, cibleId, code, proofKeys);
+    const inverseAdded = addOne(cibleId, sourceId, inverse.code, proofKeys);
+    return directAdded || inverseAdded;
+  }
+
+  for (let iteration = 0; iteration < MAX_RECONCILIATION_ITERATIONS; iteration += 1) {
+    let changed = false;
+    assertCalculatedConjoints(state);
+    const parentsByChild = assertCalculatedParentCounts(state);
+
+    const couples = new Map();
+    for (const relation of state.values()) {
+      if (relation.code !== "CONJOINT") continue;
+      const ids = [relation.id_personne_source, relation.id_personne_cible].sort();
+      const key = ids.join(":");
+      if (!couples.has(key)) couples.set(key, ids);
+    }
+    for (const [first, second] of couples.values()) {
+      for (const [parentId, conjointId] of [[first, second], [second, first]]) {
+        for (const [childId, parents] of parentsByChild) {
+          if (parents.size !== 1 || !parents.has(parentId)) continue;
+          changed = addPair(
+            childId,
+            conjointId,
+            "PARENT",
+            [familyRelationKey(childId, parentId), familyRelationKey(parentId, conjointId)],
+          ) || changed;
+        }
+      }
+    }
+
+    for (const members of getCalculatedFratrieGroups(state, personIds)) {
+      const parentSets = new Map(members.map((id) => [id, new Set(parentsByChild.get(id) ?? [])]));
+      const coherentParents = getCoherentParentSet(parentSets);
+      if (coherentParents.size > 2) {
+        throw businessError("Un enfant ne peut pas posséder plus de deux parents dans sa famille déclarée", "FAMILY_PROPAGATION_CONFLICT");
+      }
+      for (const memberId of members) {
+        for (const parentId of coherentParents) {
+          if (parentSets.get(memberId).has(parentId)) continue;
+          const ownerId = members.find((candidate) => parentSets.get(candidate).has(parentId));
+          const path = findFratriePathKeys(state, ownerId, memberId);
+          if (!ownerId || !path?.length) {
+            throw businessError("Impossible de justifier la propagation des parents", "FAMILY_PROPAGATION_CONFLICT");
+          }
+          changed = addPair(
+            memberId,
+            parentId,
+            "PARENT",
+            [familyRelationKey(ownerId, parentId), ...path],
+          ) || changed;
+        }
+      }
+      for (let index = 0; index < members.length; index += 1) {
+        for (let otherIndex = index + 1; otherIndex < members.length; otherIndex += 1) {
+          const sourceId = members[index];
+          const cibleId = members[otherIndex];
+          if (state.has(familyRelationKey(sourceId, cibleId))) continue;
+          const path = findFratriePathKeys(state, sourceId, cibleId);
+          if (!path?.length) continue;
+          changed = addPair(sourceId, cibleId, "FRATRIE", path) || changed;
+        }
+      }
+    }
+
+    if (!changed) return { expected, state };
+  }
+  throw businessError("La réconciliation familiale n'a pas convergé", "FAMILY_PROPAGATION_CONFLICT");
+}
+
+async function refreshAutoJustificationsInTransaction(personIds, expected) {
+  const rows = await getFamilyRelationsForPersonIds(personIds);
+  const byKey = new Map(rows.map((row) => [familyRelationKey(row.id_personne_source, row.id_personne_cible), row]));
+  const autoIds = rows.filter((row) => row.origine === "AUTO").map((row) => row.id);
+  if (autoIds.length) {
+    await database.query(
+      "DELETE FROM relation_personne_justification WHERE id_relation = ANY($1::uuid[])",
+      [autoIds],
+    );
+  }
+  for (const relation of expected.values()) {
+    const target = byKey.get(familyRelationKey(relation.id_personne_source, relation.id_personne_cible));
+    if (!target || target.origine !== "AUTO") continue;
+    const sourceIds = relation.proofKeys
+      .map((key) => byKey.get(key)?.id)
+      .filter((id) => id && id !== target.id);
+    await addAutoJustifications(target.id, sourceIds);
+  }
+}
+
+export async function reconcileFamilyInTransaction({ personneIds, idCompteCreateur }) {
+  const personIds = await lockFamilyComponentInTransaction(personneIds);
+  if (!personIds.length) return;
+  const types = await getFamilyTypesInTransaction();
+  let rows = await getFamilyRelationsForPersonIds(personIds);
+  await normalizeManualInversesInTransaction(rows, types, idCompteCreateur);
+  rows = await getFamilyRelationsForPersonIds(personIds);
+
+  const manualRows = rows.filter((row) => row.origine === "MANUELLE");
+  const { expected } = calculateExpectedAutoRelations({ manualRows, personIds, types });
+  const existingAuto = rows.filter((row) => row.origine === "AUTO");
+  const obsoleteAutoIds = existingAuto
+    .filter((row) => {
+      const expectedRelation = expected.get(familyRelationKey(row.id_personne_source, row.id_personne_cible));
+      return !expectedRelation || expectedRelation.code !== row.code;
+    })
+    .map((row) => row.id);
+  if (obsoleteAutoIds.length) {
+    await database.query("DELETE FROM relation_personne WHERE id = ANY($1::uuid[])", [obsoleteAutoIds]);
+  }
+
+  rows = await getFamilyRelationsForPersonIds(personIds);
+  const currentByKey = new Map(rows.map((row) => [familyRelationKey(row.id_personne_source, row.id_personne_cible), row]));
+  for (const relation of expected.values()) {
+    const current = currentByKey.get(familyRelationKey(relation.id_personne_source, relation.id_personne_cible));
+    if (current?.origine === "MANUELLE") {
+      if (current.code !== relation.code) {
+        throw businessError("Une relation MANUELLE incompatible occupe déjà cette paire", "FAMILY_PROPAGATION_CONFLICT");
+      }
+      continue;
+    }
+    if (current) continue;
+    const inserted = await database.query(
+      `INSERT INTO relation_personne (
+        id_personne_source, id_personne_cible, id_type_relation,
+        id_compte_createur, origine
+      ) VALUES ($1, $2, $3, $4, 'AUTO')
+      RETURNING id`,
+      [
+        relation.id_personne_source,
+        relation.id_personne_cible,
+        relation.id_type_relation,
+        idCompteCreateur ?? null,
+      ],
+    );
+    currentByKey.set(familyRelationKey(relation.id_personne_source, relation.id_personne_cible), {
+      ...relation,
+      id: inserted.rows[0].id,
+    });
+  }
+  await refreshAutoJustificationsInTransaction(personIds, expected);
+}
 async function getRelationRawById(id) {
   const result = await database.query(
     `SELECT id, id_personne_source, id_personne_cible, id_type_relation,
-      id_compte_createur
+      id_compte_createur, origine
     FROM relation_personne
     WHERE id = $1`,
     [id],
@@ -640,6 +1074,7 @@ async function getRelationRawById(id) {
         id_personne_cible: result.rows[0].id_personne_cible,
         id_type_relation: result.rows[0].id_type_relation,
         id_compte_createur: result.rows[0].id_compte_createur,
+        origine: result.rows[0].origine,
       })
     : null;
 }
@@ -647,7 +1082,7 @@ async function getRelationRawById(id) {
 async function getInverseRelationRaw(sourceId, cibleId, typeId) {
   const result = await database.query(
     `SELECT id, id_personne_source, id_personne_cible, id_type_relation,
-      id_compte_createur
+      id_compte_createur, origine
     FROM relation_personne
     WHERE id_personne_source = $1
       AND id_personne_cible = $2
@@ -662,6 +1097,7 @@ async function getInverseRelationRaw(sourceId, cibleId, typeId) {
         id_personne_cible: result.rows[0].id_personne_cible,
         id_type_relation: result.rows[0].id_type_relation,
         id_compte_createur: result.rows[0].id_compte_createur,
+        origine: result.rows[0].origine,
       })
     : null;
 }
@@ -703,6 +1139,49 @@ function canManageRelation(source, auth) {
   return canManagePersonneRecord(source, auth);
 }
 
+async function promoteAutoRelationPairInTransaction({ sourceId, cibleId, typeRelation, auth }) {
+  const inverseTypeId = resolveInverseType(typeRelation);
+  const direct = await getRelationByPair(sourceId, cibleId);
+  if (!direct || direct.id_type_relation !== typeRelation.id || direct.origine !== "AUTO") {
+    throw businessError("Une relation familiale existe déjà entre ces deux personnes", "RELATION_EXISTS");
+  }
+  const inverse = await getRelationByPair(cibleId, sourceId);
+  if (inverse && inverse.id_type_relation !== inverseTypeId) {
+    throw businessError("Une relation incompatible existe déjà entre ces deux personnes", "FAMILY_PROPAGATION_CONFLICT");
+  }
+
+  await database.query(
+    `UPDATE relation_personne
+     SET origine = 'MANUELLE', date_modification = now()
+     WHERE id = $1`,
+    [direct.id],
+  );
+  await database.query(
+    "DELETE FROM relation_personne_justification WHERE id_relation = $1",
+    [direct.id],
+  );
+  if (inverse?.origine === "AUTO") {
+    await database.query(
+      `UPDATE relation_personne
+       SET origine = 'MANUELLE', date_modification = now()
+       WHERE id = $1`,
+      [inverse.id],
+    );
+    await database.query(
+      "DELETE FROM relation_personne_justification WHERE id_relation = $1",
+      [inverse.id],
+    );
+  } else if (!inverse) {
+    await database.query(
+      `INSERT INTO relation_personne (
+        id_personne_source, id_personne_cible, id_type_relation,
+        id_compte_createur, origine
+      ) VALUES ($1, $2, $3, $4, 'MANUELLE')`,
+      [cibleId, sourceId, inverseTypeId, auth.compte.id],
+    );
+  }
+  return direct.id;
+}
 export async function createRelationPersonneInTransaction(
   relation,
   lang = "fr",
@@ -742,6 +1221,31 @@ export async function createRelationPersonneInTransaction(
     }
 
     if (existing) {
+      if (existing.id === undefined) {
+        throw businessError("Une relation familiale existe déjà entre ces deux personnes", "RELATION_EXISTS");
+      }
+      const existingRelation = await getRelationByPair(
+        relation.id_personne_source,
+        relation.id_personne_cible,
+      );
+      if (
+        existingRelation?.id_type_relation === typeRelation.id
+        && existingRelation.origine === "AUTO"
+      ) {
+        const relationId = await promoteAutoRelationPairInTransaction({
+          sourceId: relation.id_personne_source,
+          cibleId: relation.id_personne_cible,
+          typeRelation,
+          auth,
+        });
+        if (reconcile) {
+          await reconcileFamilyInTransaction({
+            personneIds: [relation.id_personne_source, relation.id_personne_cible],
+            idCompteCreateur: auth.compte.id,
+          });
+        }
+        return getRelationPersonneById(relationId, lang);
+      }
       throw businessError(
         "Une relation familiale existe déjà entre ces deux personnes",
         "RELATION_EXISTS",
@@ -774,12 +1278,25 @@ export async function createRelationPersonneInTransaction(
       ],
     );
 
-    if (
-      !(await relationExists(
-        relation.id_personne_cible,
-        relation.id_personne_source,
-      ))
-    ) {
+    const inverse = await getRelationByPair(
+      relation.id_personne_cible,
+      relation.id_personne_source,
+    );
+    if (inverse && inverse.id_type_relation !== inverseTypeId) {
+      throw businessError("Une relation inverse incompatible existe dans la famille", "FAMILY_PROPAGATION_CONFLICT");
+    }
+    if (inverse?.origine === "AUTO") {
+      await database.query(
+        `UPDATE relation_personne
+         SET origine = 'MANUELLE', date_modification = now()
+         WHERE id = $1`,
+        [inverse.id],
+      );
+      await database.query(
+        "DELETE FROM relation_personne_justification WHERE id_relation = $1",
+        [inverse.id],
+      );
+    } else if (!inverse) {
       await database.query(
         `INSERT INTO relation_personne (
           id_personne_source,
@@ -817,6 +1334,95 @@ export async function createRelationPersonne(relation, lang = "fr", auth = null)
   );
 }
 
+async function deleteRelationPairInTransaction({ sourceId, cibleId, typeId }) {
+  const type = await getTypeRelationForInverse(typeId);
+  if (!type) throw businessError("Type de relation introuvable", "TYPE_RELATION_NOT_FOUND");
+  const inverseTypeId = resolveInverseType(type);
+  await database.query(
+    `DELETE FROM relation_personne
+     WHERE id_personne_source = $1
+       AND id_personne_cible = $2
+       AND id_type_relation = $3`,
+    [sourceId, cibleId, typeId],
+  );
+  await database.query(
+    `DELETE FROM relation_personne
+     WHERE id_personne_source = $1
+       AND id_personne_cible = $2
+       AND id_type_relation = $3`,
+    [cibleId, sourceId, inverseTypeId],
+  );
+}
+
+export async function synchronizePersonneRelationsInTransaction({
+  idPersonne,
+  relations,
+  lang = "fr",
+  auth = null,
+}) {
+  const existing = await getRelationsPersonneByPersonne(idPersonne, lang);
+  const existingByKey = new Map(existing.map((relation) => [
+    `${relation.id_personne_cible}:${relation.id_type_relation}`,
+    relation,
+  ]));
+  const requestedByKey = new Map();
+  for (const item of relations) {
+    const key = `${item.id_personne_liee}:${item.id_type_relation}`;
+    requestedByKey.set(key, item);
+  }
+
+  const seeds = new Set([idPersonne]);
+  for (const item of relations) seeds.add(item.id_personne_liee);
+  for (const relation of existing) seeds.add(relation.id_personne_cible);
+
+  for (const relation of existing.filter((item) => item.origine === "MANUELLE")) {
+    const key = `${relation.id_personne_cible}:${relation.id_type_relation}`;
+    if (requestedByKey.has(key)) continue;
+    await deleteRelationPairInTransaction({
+      sourceId: idPersonne,
+      cibleId: relation.id_personne_cible,
+      typeId: relation.id_type_relation,
+    });
+  }
+
+  for (const item of relations) {
+    const key = `${item.id_personne_liee}:${item.id_type_relation}`;
+    const existingExact = existingByKey.get(key);
+    if (existingExact?.origine === "MANUELLE") continue;
+    if (existingExact?.origine === "AUTO") {
+      if (item.action === "CONFIRMER_MANUELLE") {
+        await createRelationPersonneInTransaction(
+          new RelationPersonne({
+            id_personne_source: idPersonne,
+            id_personne_cible: item.id_personne_liee,
+            id_type_relation: item.id_type_relation,
+          }),
+          lang,
+          auth,
+          { reconcile: false },
+        );
+      }
+      continue;
+    }
+
+    const occupied = await getRelationByPair(idPersonne, item.id_personne_liee);
+    if (occupied) {
+      throw businessError("Une relation incompatible existe déjà entre ces deux personnes", "FAMILY_PROPAGATION_CONFLICT");
+    }
+    await createRelationPersonneInTransaction(
+      new RelationPersonne({
+        id_personne_source: idPersonne,
+        id_personne_cible: item.id_personne_liee,
+        id_type_relation: item.id_type_relation,
+      }),
+      lang,
+      auth,
+      { reconcile: false },
+    );
+  }
+
+  return [...seeds];
+}
 export async function updateRelationPersonneType(
   id,
   idTypeRelation,
@@ -825,9 +1431,7 @@ export async function updateRelationPersonneType(
 ) {
   const relationId = await database.transaction(async () => {
     const relation = await getRelationRawById(id);
-    if (!relation) {
-      return null;
-    }
+    if (!relation) return null;
 
     const [source, cible, oldTypeRelation, newTypeRelation] = await Promise.all([
       getPersonneForRelation(relation.id_personne_source),
@@ -835,30 +1439,13 @@ export async function updateRelationPersonneType(
       getTypeRelationForInverse(relation.id_type_relation),
       getTypeRelationForInverse(idTypeRelation),
     ]);
-
     if (!source || !oldTypeRelation) {
-      throw businessError(
-        "Impossible de déterminer la relation inverse",
-        "INVERSE_NOT_CONFIGURED",
-      );
+      throw businessError("Impossible de déterminer la relation inverse", "INVERSE_NOT_CONFIGURED");
     }
-
-    if (!newTypeRelation) {
-      throw businessError(
-        "Type de relation introuvable",
-        "TYPE_RELATION_NOT_FOUND",
-      );
-    }
-
-    if (!cible || !canManageRelation(source, auth)) {
-      throw authorizationError("modifier");
-    }
-
+    if (!newTypeRelation) throw businessError("Type de relation introuvable", "TYPE_RELATION_NOT_FOUND");
+    if (!cible || !canManageRelation(source, auth)) throw authorizationError("modifier");
     if (newTypeRelation.code === "CONJOINT") {
-      await assertConjointAvailableInTransaction(
-        relation.id_personne_source,
-        relation.id_personne_cible,
-      );
+      await assertConjointAvailableInTransaction(relation.id_personne_source, relation.id_personne_cible);
     }
 
     const oldInverseTypeId = resolveInverseType(oldTypeRelation);
@@ -868,45 +1455,49 @@ export async function updateRelationPersonneType(
       relation.id_personne_source,
       oldInverseTypeId,
     );
+    if (inverse && inverse.id_type_relation !== oldInverseTypeId) {
+      throw businessError("Une relation inverse incompatible existe dans la famille", "FAMILY_PROPAGATION_CONFLICT");
+    }
 
     await database.query(
       `UPDATE relation_personne
-      SET id_type_relation = $1, date_modification = now()
-      WHERE id = $2`,
+       SET id_type_relation = $1, origine = 'MANUELLE', date_modification = now()
+       WHERE id = $2`,
       [idTypeRelation, relation.id],
     );
+    await database.query("DELETE FROM relation_personne_justification WHERE id_relation = $1", [relation.id]);
 
     if (inverse) {
       await database.query(
         `UPDATE relation_personne
-        SET id_type_relation = $1, date_modification = now()
-        WHERE id = $2`,
+         SET id_type_relation = $1, origine = 'MANUELLE', date_modification = now()
+         WHERE id = $2`,
         [newInverseTypeId, inverse.id],
       );
+      await database.query("DELETE FROM relation_personne_justification WHERE id_relation = $1", [inverse.id]);
     } else {
       await database.query(
         `INSERT INTO relation_personne (
-          id_personne_source,
-          id_personne_cible,
-          id_type_relation,
-          id_compte_createur
-        )
-        VALUES ($1, $2, $3, $4)`,
+          id_personne_source, id_personne_cible, id_type_relation,
+          id_compte_createur, origine
+        ) VALUES ($1, $2, $3, $4, 'MANUELLE')`,
         [
           relation.id_personne_cible,
           relation.id_personne_source,
           newInverseTypeId,
-          relation.id_compte_createur,
+          auth.compte.id,
         ],
       );
     }
 
+    await reconcileFamilyInTransaction({
+      personneIds: [relation.id_personne_source, relation.id_personne_cible],
+      idCompteCreateur: auth.compte.id,
+    });
     return relation.id;
   });
-
   return relationId ? getRelationPersonneById(relationId, lang) : null;
 }
-
 export async function deleteRelationPersonne(id, auth = null, lang = "fr") {
   return database.transaction(async () => {
     const relation = await getRelationRawById(id);
@@ -947,6 +1538,10 @@ export async function deleteRelationPersonne(id, auth = null, lang = "fr") {
       ],
     );
 
+    await reconcileFamilyInTransaction({
+      personneIds: [relation.id_personne_source, relation.id_personne_cible],
+      idCompteCreateur: auth.compte.id,
+    });
     return relationEnrichie;
   });
 }

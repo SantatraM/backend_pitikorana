@@ -5,6 +5,7 @@ export default class RelationPersonne {
     id_personne_cible,
     id_type_relation,
     id_compte_createur = null,
+    origine = null,
     personne_source = null,
     personne_cible = null,
     type_relation = null,
@@ -14,6 +15,7 @@ export default class RelationPersonne {
     this.id_personne_cible = id_personne_cible;
     this.id_personne_liee = id_personne_cible;
     this.id_type_relation = id_type_relation;
+    this.origine = origine;
     Object.defineProperty(this, "id_compte_createur", {
       value: id_compte_createur,
       writable: true,

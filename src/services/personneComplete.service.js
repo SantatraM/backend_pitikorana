@@ -13,6 +13,7 @@ import { createPersonneCentreInteret } from "./personneCentreInteret.service.js"
 import {
   createRelationPersonneInTransaction,
   reconcileFamilyInTransaction,
+  synchronizePersonneRelationsInTransaction,
 } from "./relationPersonne.service.js";
 import { assertCanManagePersonne } from "./personneAuthorization.service.js";
 import {
@@ -148,9 +149,17 @@ export async function createPersonneComplete(body, lang = "fr", auth = null) {
         }),
         lang,
         auth,
+        { reconcile: false },
       );
     }
 
+    await reconcileFamilyInTransaction({
+      personneIds: [
+        idPersonne,
+        ...relations.map((relation) => object(relation, "Relation").id_personne_liee),
+      ],
+      idCompteCreateur: auth.compte.id,
+    });
     for (const activite of activites) {
       await createPersonneActivite(
         new PersonneActivite({ ...object(activite, "Activité"), id_personne: idPersonne }),
@@ -239,34 +248,28 @@ export async function updatePersonneComplete(idPersonne, body, lang = "fr", auth
       );
     }
 
-    // Une relation est toujours réciproque. Supprimer toutes les lignes qui
-    // concernent la personne élimine aussi les inverses avant de recréer l'état final.
-    await database.query(
-      "DELETE FROM relation_personne WHERE id_personne_source = $1 OR id_personne_cible = $1",
-      [idPersonne],
-    );
-    const relationPersonneIds = new Set([idPersonne]);
-    for (const relation of relations) {
-      const item = object(relation, "Relation");
-      const idPersonneLiee = uuid(item.id_personne_liee, "Personne liée");
-      relationPersonneIds.add(idPersonneLiee);
-      await createRelationPersonneInTransaction(
-        new RelationPersonne({
-          id_personne_source: idPersonne,
-          id_personne_cible: idPersonneLiee,
+    const relationPersonneIds = await synchronizePersonneRelationsInTransaction({
+      idPersonne,
+      relations: relations.map((relation) => {
+        const item = object(relation, "Relation");
+        const action = item.action == null ? null : item.action;
+        if (action !== null && action !== "CONFIRMER_MANUELLE") {
+          throw completePayloadError("Action de relation invalide");
+        }
+        return {
+          id_personne_liee: uuid(item.id_personne_liee, "Personne liée"),
           id_type_relation: uuid(item.id_type_relation, "Type de relation"),
-        }),
-        lang,
-        auth,
-        { reconcile: false },
-      );
-    }
-
-    await reconcileFamilyInTransaction({
-      personneIds: [...relationPersonneIds],
-      idCompteCreateur: auth.compte.id,
+          action,
+        };
+      }),
+      lang,
+      auth,
     });
 
+    await reconcileFamilyInTransaction({
+      personneIds: relationPersonneIds,
+      idCompteCreateur: auth.compte.id,
+    });
     await database.query("DELETE FROM personne_activite WHERE id_personne = $1", [idPersonne]);
     for (const activite of activites) {
       await createPersonneActivite(
