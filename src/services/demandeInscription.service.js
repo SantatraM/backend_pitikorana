@@ -1091,7 +1091,10 @@ export async function searchPersonnesPourInscription(query) {
   const params = terms.map((term) => `%${escapeLike(term)}%`);
   const conditions = params.map(
     (_, index) =>
-      `(nom ILIKE $${index + 1} ESCAPE '\\' OR prenom ILIKE $${index + 1} ESCAPE '\\')`,
+      `(nom ILIKE $${index + 1} ESCAPE '\\'
+        OR prenom ILIKE $${index + 1} ESCAPE '\\'
+        OR nom_usage ILIKE $${index + 1} ESCAPE '\\'
+        OR autres_appellations ILIKE $${index + 1} ESCAPE '\\')`,
   );
 
   const result = await database.query(
