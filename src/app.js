@@ -37,6 +37,7 @@ import journeesAlahadinTaranakaRoutes from "./routes/journeesAlahadinTaranaka.ro
 import sosoKevitraRoutes, {
   createSosoKevitraRouter,
 } from "./routes/sosoKevitra.routes.js";
+import tetikasaRoutes from "./routes/tetikasa.routes.js";
 import {
   getRequestContext,
   runWithRequestContext,
@@ -152,6 +153,7 @@ export function createApp({ photoUploadMiddleware, requestContext = null } = {})
       ? createSosoKevitraRouter({ photoUploadMiddleware })
       : sosoKevitraRoutes,
   );
+  app.use("/api/tetikasa", tetikasaRoutes);
 
   return app;
 }

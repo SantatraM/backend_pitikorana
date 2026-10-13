@@ -36,6 +36,7 @@ import {
 } from "../services/sosoKevitraContribution.service.js";
 import { prolongerConsultation } from "../services/sosoKevitraProlongation.service.js";
 import { prendreDecisionFinale } from "../services/sosoKevitraDecision.service.js";
+import { creerTetikasaDepuisSosoKevitra } from "../services/tetikasa.service.js";
 import { getRequestContext } from "../config/requestContext.js";
 import { normalizeMemoryPhotoFile } from "../services/photoUploadInput.service.js";
 
@@ -673,6 +674,40 @@ export async function prendreDecision(req, res) {
     }
     if (error.code === "SOSO_KEVITRA_STATUS_NOT_FOUND") {
       return res.status(500).json({ success: false, message: "Configuration Soso-kevitra indisponible" });
+    }
+    return handleError(error, res);
+  }
+}
+
+export async function creerTetikasa(req, res) {
+  if (!isUuid(req.params.id)) return invalidId(res);
+  try {
+    const data = await creerTetikasaDepuisSosoKevitra(req.params.id, req.auth);
+    return res.status(data.created ? 201 : 200).json({
+      success: true,
+      message: data.created
+        ? "Drafitra Tetikasa créé avec succès"
+        : "Un Tetikasa existe déjà pour ce Soso-kevitra",
+      data,
+    });
+  } catch (error) {
+    if (error.code === "SOSO_KEVITRA_NOT_FOUND") {
+      return res.status(404).json({ success: false, message: error.message });
+    }
+    if (["SOSO_KEVITRA_NOT_ACCEPTED"].includes(error.code)) {
+      return res.status(409).json({ success: false, message: error.message });
+    }
+    if (error.code === "AUTH_REQUIRED") {
+      return res.status(401).json({ success: false, message: error.message });
+    }
+    if (error.code === "TETIKASA_FORBIDDEN") {
+      return res.status(403).json({ success: false, message: error.message });
+    }
+    if (error.code === "TETIKASA_STATUS_NOT_FOUND") {
+      return res.status(500).json({
+        success: false,
+        message: "Configuration Tetikasa indisponible",
+      });
     }
     return handleError(error, res);
   }

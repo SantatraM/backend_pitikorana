@@ -3,6 +3,7 @@ import {
   addSoutien,
   addContribution,
   addContributionPhotos,
+  creerTetikasa,
   createBrouillon,
   demanderCorrection,
   editContribution,
@@ -32,7 +33,7 @@ import {
   uploadPhotos,
 } from "../controllers/sosoKevitra.controller.js";
 import { requireAuth } from "../middlewares/auth.middleware.js";
-import { requireBusinessAdmin } from "../middlewares/role.middleware.js";
+import { requireBusinessAdmin, requireRole } from "../middlewares/role.middleware.js";
 
 const passthrough = (_req, _res, next) => next();
 
@@ -60,6 +61,7 @@ export function createSosoKevitraRouter({ photoUploadMiddleware = passthrough } 
   router.post("/:id/non-publier", requireAuth, requireBusinessAdmin, nonPublier);
   router.post("/:id/publier", requireAuth, requireBusinessAdmin, publier);
   router.post("/:id/decision", requireAuth, requireBusinessAdmin, prendreDecision);
+  router.post("/:id/creer-tetikasa", requireAuth, requireRole("ADMIN", "PASTEUR"), creerTetikasa);
   router.post("/:id/prolonger", requireAuth, requireBusinessAdmin, prolonger);
   router.post("/:id/photos", requireAuth, photoUploadMiddleware, uploadPhotos);
   router.put("/:id/photos/ordre", requireAuth, reorderPhotos);
