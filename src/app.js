@@ -38,6 +38,8 @@ import sosoKevitraRoutes, {
   createSosoKevitraRouter,
 } from "./routes/sosoKevitra.routes.js";
 import tetikasaRoutes from "./routes/tetikasa.routes.js";
+import fandraisanAnjaraRoutes from "./routes/fandraisanAnjara.routes.js";
+import foyersRoutes from "./routes/foyers.routes.js";
 import {
   getRequestContext,
   runWithRequestContext,
@@ -154,6 +156,8 @@ export function createApp({ photoUploadMiddleware, requestContext = null } = {})
       : sosoKevitraRoutes,
   );
   app.use("/api/tetikasa", tetikasaRoutes);
+  app.use("/api/fandraisan-anjara", fandraisanAnjaraRoutes);
+  app.use("/api/foyers", foyersRoutes);
 
   return app;
 }

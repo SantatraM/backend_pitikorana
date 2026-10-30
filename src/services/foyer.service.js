@@ -273,3 +273,77 @@ export async function getPersistentFoyerByPersonne(idPersonne) {
 
   return result.rows[0] ?? null;
 }
+
+function normalizeSelectionPagination(value = {}) {
+  const page = value.page === undefined ? 1 : Number(value.page);
+  const limit = value.limit === undefined ? 20 : Number(value.limit);
+  if (!Number.isInteger(page) || page < 1 || !Number.isInteger(limit) || limit < 1 || limit > 50) {
+    throw businessError("Les paramètres de pagination sont invalides.", "FOYER_SELECTION_INVALID");
+  }
+  const recherche = value.recherche === undefined ? "" : String(value.recherche).trim();
+  if (recherche.length > 100) {
+    throw businessError("La recherche de foyer est trop longue.", "FOYER_SELECTION_INVALID");
+  }
+  return { page, limit, recherche };
+}
+
+function foyerSelectionLabel(row) {
+  const personne1 = [row.personne_1_nom, row.personne_1_prenom].filter(Boolean).join(" ");
+  const personne2 = [row.personne_2_nom, row.personne_2_prenom].filter(Boolean).join(" ");
+  return personne2 ? `${personne1} / ${personne2}` : personne1;
+}
+
+/**
+ * Liste uniquement les foyers persistants actuellement exploitables comme contributeurs.
+ * Chaque foyer est retourné indépendamment, y compris lorsqu'une personne appartient à
+ * plusieurs foyers actifs : le client doit alors demander une sélection explicite.
+ */
+export async function listFoyersSelection(query = {}, client = database) {
+  const { page, limit, recherche } = normalizeSelectionPagination(query);
+  const params = [];
+  let where = `
+    WHERE f.statut = 'ACTIF'
+      AND f.type_foyer IN ('COUPLE', 'MONOPARENTAL')
+      AND p1.id IS NOT NULL
+      AND (f.type_foyer = 'MONOPARENTAL' OR p2.id IS NOT NULL)`;
+
+  if (recherche) {
+    params.push(`%${recherche}%`);
+    where += `
+      AND (
+        concat_ws(' ', p1.nom, p1.prenom) ILIKE $${params.length}
+        OR concat_ws(' ', p2.nom, p2.prenom) ILIKE $${params.length}
+      )`;
+  }
+
+  const joins = `
+    FROM foyer f
+    JOIN personne p1 ON p1.id = f.id_personne_1
+    LEFT JOIN personne p2 ON p2.id = f.id_personne_2`;
+  const total = await client.query(`SELECT COUNT(*)::integer AS total ${joins} ${where}`, params);
+  const offset = (page - 1) * limit;
+  const result = await client.query(
+    `SELECT
+      f.id, f.type_foyer,
+      p1.id AS personne_1_id, p1.nom AS personne_1_nom, p1.prenom AS personne_1_prenom,
+      p2.id AS personne_2_id, p2.nom AS personne_2_nom, p2.prenom AS personne_2_prenom
+    ${joins}
+    ${where}
+    ORDER BY p1.nom ASC, p1.prenom ASC, f.id ASC
+    LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
+    [...params, limit, offset],
+  );
+  const count = total.rows[0]?.total ?? 0;
+  return {
+    foyers: result.rows.map((row) => ({
+      id: row.id,
+      type_foyer: row.type_foyer,
+      libelle: foyerSelectionLabel(row),
+      personnes: [
+        { id: row.personne_1_id, nom: row.personne_1_nom, prenom: row.personne_1_prenom },
+        ...(row.personne_2_id ? [{ id: row.personne_2_id, nom: row.personne_2_nom, prenom: row.personne_2_prenom }] : []),
+      ],
+    })),
+    pagination: { page, limit, total: count, total_pages: count ? Math.ceil(count / limit) : 0 },
+  };
+}

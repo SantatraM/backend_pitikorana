@@ -7,6 +7,7 @@ import {
   getMesBrouillonsSosoKevitra,
   getSosoKevitraAVerifier,
   getSosoKevitraById,
+  getReadableSosoKevitraRow,
   getSosoKevitraPublics,
   getStatutsSosoKevitra,
   nonPublierSosoKevitra,
@@ -480,6 +481,9 @@ export async function removeSoutien(req, res) {
 export async function getContributions(req, res) {
   if (!isUuid(req.params.id)) return invalidId(res);
   try {
+    if (!await getReadableSosoKevitraRow(req.params.id, req.auth)) {
+      return res.status(404).json({ success: false, message: "Soso-kevitra introuvable" });
+    }
     return res.json({
       success: true,
       data: await listContributions(

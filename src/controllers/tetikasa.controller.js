@@ -1,7 +1,10 @@
 import {
+  getTetikasaList,
   getTetikasaById,
   updateTetikasaDraft,
   updateTetikasaDraftContent,
+  transitionTetikasa,
+  creerTetikasaManuel,
 } from "../services/tetikasa.service.js";
 
 const UUID_PATTERN =
@@ -21,6 +24,9 @@ function handleTetikasaError(error, res) {
   if (error.code === "TETIKASA_NOT_FOUND") {
     return res.status(404).json({ success: false, message: error.message });
   }
+  if (error.code === "TETIKASA_INCOMPLETE") {
+    return res.status(409).json({ success: false, code: error.code, message: error.message, fields: error.fields });
+  }
   if (["TETIKASA_STATE_INVALID", "TETIKASA_REVISION_CONFLICT"].includes(error.code)) {
     return res.status(409).json({ success: false, message: error.message });
   }
@@ -32,6 +38,24 @@ function handleTetikasaError(error, res) {
   }
   if (error.code) console.error(error);
   return res.status(500).json({ success: false, message: "Erreur serveur" });
+}
+
+export async function listTetikasa(req, res) {
+  try {
+    const data = await getTetikasaList(req.auth);
+    return res.json({ success: true, data });
+  } catch (error) {
+    return handleTetikasaError(error, res);
+  }
+}
+
+export async function createTetikasa(req, res) {
+  try {
+    const data = await creerTetikasaManuel(req.body, req.auth);
+    return res.status(201).json({ success: true, data });
+  } catch (error) {
+    return handleTetikasaError(error, res);
+  }
 }
 
 export async function getTetikasa(req, res) {
@@ -69,6 +93,19 @@ export async function updateTetikasaContent(req, res) {
       data,
     });
   } catch (error) {
+    return handleTetikasaError(error, res);
+  }
+}
+
+export async function transitionTetikasaController(req, res) {
+  if (!UUID_PATTERN.test(req.params.id)) return invalidId(res);
+  try {
+    const data = await transitionTetikasa(req.params.id, req.body, req.auth);
+    return res.json({ success: true, data });
+  } catch (error) {
+    if (["TETIKASA_STATE_INVALID", "TETIKASA_REVISION_CONFLICT"].includes(error.code)) {
+      return res.status(409).json({ success: false, code: error.code, message: error.message });
+    }
     return handleTetikasaError(error, res);
   }
 }

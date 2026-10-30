@@ -1,6 +1,7 @@
 import database from "../config/db.js";
+import { isBusinessManager } from "../utils/roles.js";
 
-const TETIKASA_CREATOR_ROLES = new Set(["ADMIN", "PASTEUR"]);
+const TETIKASA_CREATOR_ROLES = new Set(["ADMIN", "PASTEUR", "BUREAU_ZANAKA_AMPIELEZANA"]);
 const DRAFT_STATUS = "DRAFITRA";
 const UUID_SYNC_MODE = "SYNCHRONISATION_UUID_V1";
 const REVISION_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$/;
@@ -236,6 +237,59 @@ async function getExistingTetikasa(idSosoKevitra) {
   return result.rows[0] ?? null;
 }
 
+export async function getTetikasaList(auth) {
+  if (!auth?.personne?.id) throw businessError("Authentification requise", "AUTH_REQUIRED");
+  const canReadAll = isBusinessManager(auth?.compte?.role);
+
+  const result = await database.query(
+    `SELECT
+      t.id,
+      t.titre,
+      statut.code AS statut_code,
+      createur.id AS created_by_id,
+      createur.nom AS created_by_nom,
+      createur.prenom AS created_by_prenom,
+      t.lieu,
+      t.lieu_non_defini,
+      to_char(t.date_debut_prevue, 'YYYY-MM-DD') AS date_debut_prevue,
+      to_char(t.date_fin_prevue, 'YYYY-MM-DD') AS date_fin_prevue,
+      t.date_creation,
+      t.date_modification,
+      t.id_soso_kevitra_source,
+      COALESCE(budget.total_budget_calcule, 0)::text AS total_budget_calcule
+    FROM tetikasa t
+    JOIN statut_tetikasa statut ON statut.id = t.id_statut_tetikasa
+    JOIN personne createur ON createur.id = t.created_by
+    LEFT JOIN (
+      SELECT id_tetikasa, SUM(quantite * prix_unitaire_estime) AS total_budget_calcule
+      FROM tetikasa_ligne_budget
+      GROUP BY id_tetikasa
+    ) budget ON budget.id_tetikasa = t.id
+    WHERE ($1::boolean OR statut.code = 'MISOKATRA')
+    ORDER BY t.date_creation DESC, t.id DESC`,
+    [canReadAll],
+  );
+
+  return result.rows.map((row) => ({
+    id: row.id,
+    titre: row.titre,
+    statut: { code: row.statut_code },
+    created_by: {
+      id: row.created_by_id,
+      nom: row.created_by_nom,
+      prenom: row.created_by_prenom,
+    },
+    lieu: row.lieu,
+    lieu_non_defini: row.lieu_non_defini,
+    date_debut_prevue: row.date_debut_prevue,
+    date_fin_prevue: row.date_fin_prevue,
+    date_creation: row.date_creation,
+    date_modification: row.date_modification,
+    id_soso_kevitra_source: row.id_soso_kevitra_source,
+    total_budget_calcule: row.total_budget_calcule,
+  }));
+}
+
 export async function creerTetikasaDepuisSosoKevitra(idSosoKevitra, auth) {
   const idCreateur = getCreator(auth);
 
@@ -456,6 +510,158 @@ async function addModificationHistory(idTetikasa, idActeur) {
     VALUES ($1, 'MODIFICATION_DRAFT', $2)`,
     [idTetikasa, idActeur],
   );
+}
+
+const TETIKASA_TRANSITIONS = {
+  SOUMISSION_VALIDATION: { source: "DRAFITRA", target: "EN_ATTENTE_VALIDATION" },
+  VALIDATION: { source: "EN_ATTENTE_VALIDATION", target: "VALIDE" },
+  REFUS: { source: "EN_ATTENTE_VALIDATION", target: "REFUSE", reasonRequired: true },
+  RETOUR_CORRECTION: { source: "EN_ATTENTE_VALIDATION", target: "DRAFITRA", reasonRequired: true },
+  OUVRIR: { source: "VALIDE", target: "MISOKATRA", historyAction: "OUVERTURE_PROJET" },
+};
+
+async function assertSubmissionComplete(tetikasa) {
+  const missing = [];
+  for (const field of ["titre", "description", "objectif", "beneficiaires"]) {
+    if (typeof tetikasa[field] !== "string" || !tetikasa[field].trim()) missing.push(field);
+  }
+  if (!tetikasa.lieu_non_defini && (typeof tetikasa.lieu !== "string" || !tetikasa.lieu.trim())) missing.push("lieu");
+  if (!tetikasa.date_debut_prevue) missing.push("date_debut_prevue");
+  if (!tetikasa.date_fin_prevue) missing.push("date_fin_prevue");
+  if (tetikasa.date_debut_prevue && tetikasa.date_fin_prevue) {
+    const start = normalizeDate(tetikasa.date_debut_prevue, "Date de début prévue");
+    const end = normalizeDate(tetikasa.date_fin_prevue, "Date de fin prévue");
+    assertDateRange(start, end, "Période prévisionnelle");
+  }
+
+  const presence = await database.query(
+    `SELECT EXISTS (SELECT 1 FROM tetikasa_responsable WHERE id_tetikasa = $1) AS has_responsable,
+      EXISTS (SELECT 1 FROM tetikasa_action WHERE id_tetikasa = $1) AS has_action`,
+    [tetikasa.id],
+  );
+  if (!presence.rows[0].has_responsable) missing.push("responsables");
+  if (!presence.rows[0].has_action) missing.push("actions");
+
+  const budget = await database.query(
+    `SELECT designation, quantite, prix_unitaire_estime FROM tetikasa_ligne_budget WHERE id_tetikasa = $1`,
+    [tetikasa.id],
+  );
+  for (const line of budget.rows) {
+    normalizeText(line.designation, "Désignation budget", 100000, { nullable: false });
+    normalizeDecimal(line.quantite, "Quantité budget", { required: true, precision: 12, scale: 3, min: 0.000000001 });
+    normalizeDecimal(line.prix_unitaire_estime, "Prix unitaire estimé", { required: true, precision: 18, scale: 2, min: 0 });
+  }
+  if (missing.length) {
+    const error = businessError("Le Tetikasa est incomplet pour la soumission", "TETIKASA_INCOMPLETE");
+    error.fields = missing;
+    throw error;
+  }
+}
+
+function prepareTransitionTetikasa(idTetikasa, body, auth) {
+  const idActeur = getCreator(auth);
+  const id = normalizeUuid(idTetikasa, "Identifiant du Tetikasa", true);
+  assertPlainObject(body, "Transition Tetikasa invalide");
+  assertAllowedFields(body, new Set(["action", "revision", "commentaire"]), "Transition Tetikasa invalide");
+  if (typeof body.action !== "string" || !Object.hasOwn(TETIKASA_TRANSITIONS, body.action)) {
+    throw businessError("Transition Tetikasa invalide", "TETIKASA_INVALID");
+  }
+  const transition = TETIKASA_TRANSITIONS[body.action];
+  if (body.action !== "SOUMISSION_VALIDATION" && !["ADMIN", "PASTEUR"].includes(auth.compte.role)) {
+    throw businessError("Accès interdit", "TETIKASA_FORBIDDEN");
+  }
+  const revision = normalizeSyncRevision(body.revision);
+  if (body.commentaire != null && typeof body.commentaire !== "string") {
+    throw businessError("Commentaire invalide", "TETIKASA_INVALID");
+  }
+  const commentaire = body.commentaire?.trim() || null;
+  if (transition.reasonRequired && !commentaire) {
+    throw businessError("Un motif est obligatoire", "TETIKASA_INVALID");
+  }
+
+  return { id, idActeur, action: body.action, transition, revision, commentaire };
+}
+
+// L'appelant doit déjà avoir ouvert une transaction avec database.transaction.
+async function executerTransitionTetikasa({ id, idActeur, action, transition, revision, commentaire }) {
+    const tetikasa = await getDraftForUpdate(id);
+    if (!tetikasa) throw businessError("Tetikasa introuvable", "TETIKASA_NOT_FOUND");
+    if (tetikasa.revision !== revision) throw businessError("Révision Tetikasa obsolète", "TETIKASA_REVISION_CONFLICT");
+    if (tetikasa.statut_code !== transition.source) {
+      throw businessError("Transition incompatible avec le statut actuel", "TETIKASA_STATE_INVALID");
+    }
+    if (action === "SOUMISSION_VALIDATION") await assertSubmissionComplete(tetikasa);
+
+    const status = await database.query("SELECT id FROM statut_tetikasa WHERE code = $1", [transition.target]);
+    if (!status.rows[0]) throw businessError("Statut Tetikasa introuvable", "TETIKASA_STATUS_NOT_FOUND");
+    const updated = await database.query(
+      `UPDATE tetikasa SET id_statut_tetikasa = $1,
+        date_modification = GREATEST(clock_timestamp(), date_modification + interval '1 microsecond')
+      WHERE id = $2
+      RETURNING to_char(date_modification AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS revision`,
+      [status.rows[0].id, id],
+    );
+    await database.query(
+      `INSERT INTO tetikasa_historique (id_tetikasa, action, id_acteur, commentaire)
+      VALUES ($1, $2, $3, $4)`,
+      [id, transition.historyAction ?? action, idActeur, commentaire],
+    );
+    return { tetikasa: { id, statut: transition.target, revision: updated.rows[0].revision }, action };
+}
+
+export async function transitionTetikasaDansTransaction(idTetikasa, body, auth) {
+  return executerTransitionTetikasa(prepareTransitionTetikasa(idTetikasa, body, auth));
+}
+
+export async function transitionTetikasa(idTetikasa, body, auth) {
+  const transition = prepareTransitionTetikasa(idTetikasa, body, auth);
+  return database.transaction(() => executerTransitionTetikasa(transition));
+}
+
+export async function creerTetikasaManuel(body, auth) {
+  const idActeur = getCreator(auth);
+  assertPlainObject(body, "Données Tetikasa invalides");
+  const collections = ["responsables", "actions", "ressources", "budget"];
+  assertAllowedFields(body, new Set(["action", ...MAIN_EDITABLE_FIELDS, ...collections]), "Un champ Tetikasa n'est pas autorisé");
+  if (!["BROUILLON", "SOUMETTRE"].includes(body.action)) throw businessError("Action de création invalide", "TETIKASA_INVALID");
+  const main = Object.fromEntries([...MAIN_EDITABLE_FIELDS].filter((field) => Object.hasOwn(body, field)).map((field) => [field, body[field]]));
+  const patch = normalizeMainPatch(main);
+  patch.titre = normalizeText(patch.titre, "titre", 200, { nullable: false });
+  assertDateRange(patch.date_debut_prevue, patch.date_fin_prevue, "Période prévisionnelle");
+  const responsables = normalizeResponsables(Object.hasOwn(body, "responsables") ? body.responsables : []);
+  const actions = normalizeActions(Object.hasOwn(body, "actions") ? body.actions : []);
+  const ressources = normalizeRessources(Object.hasOwn(body, "ressources") ? body.ressources : []);
+  const budget = normalizeBudget(Object.hasOwn(body, "budget") ? body.budget : []);
+  if (responsables.filter((row) => row.type_responsabilite === "PRINCIPAL").length > 1) {
+    throw businessError("Un seul responsable principal est autorisé", "TETIKASA_INVALID");
+  }
+  const responsibleIds = new Set(responsables.map((row) => row.id_personne));
+  if (actions.some((row) => row.id_responsable && !responsibleIds.has(row.id_responsable))) {
+    throw businessError("Le responsable d'une action doit être responsable du Tetikasa", "TETIKASA_INVALID");
+  }
+
+  return database.transaction(async () => {
+    await assertPersonsExist([...responsibleIds]);
+    const status = await database.query("SELECT id, code FROM statut_tetikasa WHERE code = 'DRAFITRA'");
+    if (!status.rows[0]) throw businessError("Statut Tetikasa DRAFITRA introuvable", "TETIKASA_STATUS_NOT_FOUND");
+    const result = await database.query(
+      `INSERT INTO tetikasa (id_soso_kevitra_source, created_by, id_statut_tetikasa, titre, description, raison, objectif, beneficiaires, lieu, lieu_non_defini, date_debut_prevue, date_fin_prevue, devise)
+       VALUES (NULL, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+       RETURNING id, to_char(date_modification AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS revision`,
+      [idActeur, status.rows[0].id, patch.titre, patch.description ?? null, patch.raison ?? null, patch.objectif ?? null, patch.beneficiaires ?? null, patch.lieu ?? null, patch.lieu_non_defini ?? false, patch.date_debut_prevue ?? null, patch.date_fin_prevue ?? null, patch.devise ?? "MGA"],
+    );
+    const { id, revision } = result.rows[0];
+    await replaceResponsables(id, responsables);
+    await insertActions(id, actions);
+    await replaceRessources(id, ressources);
+    await replaceBudget(id, budget);
+    await database.query("INSERT INTO tetikasa_historique (id_tetikasa, action, id_acteur, commentaire) VALUES ($1, $2, $3, $4)", [id, "CREATION_MANUELLE_DRAFT", idActeur, null]);
+    if (body.action === "SOUMETTRE") {
+      const transition = await transitionTetikasaDansTransaction(id, { action: "SOUMISSION_VALIDATION", revision, commentaire: null }, auth);
+      return { tetikasa: transition.tetikasa };
+    }
+    return { tetikasa: { id, statut: "DRAFITRA", revision } };
+  });
 }
 
 export async function updateTetikasaDraft(idTetikasa, body, auth) {
@@ -813,6 +1019,7 @@ export async function updateTetikasaDraftContent(idTetikasa, body, auth) {
 
 export async function getTetikasaById(idTetikasa, auth) {
   if (!auth?.personne?.id) throw businessError("Authentification requise", "AUTH_REQUIRED");
+  const canReadAll = isBusinessManager(auth?.compte?.role);
   const mainResult = await database.query(
     `SELECT
       t.id,
@@ -841,8 +1048,8 @@ export async function getTetikasaById(idTetikasa, auth) {
     FROM tetikasa t
     JOIN statut_tetikasa statut ON statut.id = t.id_statut_tetikasa
     JOIN personne createur ON createur.id = t.created_by
-    WHERE t.id = $1`,
-    [idTetikasa],
+    WHERE t.id = $1 AND ($2::boolean OR statut.code = 'MISOKATRA')`,
+    [idTetikasa, canReadAll],
   );
   const main = mainResult.rows[0];
   if (!main) return null;
@@ -931,7 +1138,7 @@ export async function getTetikasaById(idTetikasa, auth) {
     ressources: ressources.rows,
     budget: budget.rows,
     total_budget_calcule: total.rows[0].total_budget_calcule,
-    historique: historique.rows.map((row) => ({
+    historique: (canReadAll ? historique.rows : []).map((row) => ({
       id: row.id,
       action: row.action,
       commentaire: row.commentaire,

@@ -187,7 +187,7 @@ function canReadSosoKevitra(row, auth) {
     case "EN_ATTENTE_VERIFICATION":
     case "A_CORRIGER":
     case "NON_PUBLIE":
-      return isAuthor || isAdmin(auth);
+      return isAuthor || isAdmin(auth) || auth?.compte?.role === "PASTEUR";
     case "EN_CONSULTATION":
     case "A_L_ETUDE":
     case "ACCEPTE":
@@ -196,6 +196,12 @@ function canReadSosoKevitra(row, auth) {
     default:
       return false;
   }
+}
+
+export async function getReadableSosoKevitraRow(id, auth) {
+  if (!auth?.personne?.id) throw businessError("Authentification requise", "AUTH_REQUIRED");
+  const row = await getSosoRow(id);
+  return row && canReadSosoKevitra(row, auth) ? row : null;
 }
 
 function consultationState(row) {
@@ -210,7 +216,8 @@ function consultationState(row) {
 
 async function getSosoDetails(row, lang, auth = null) {
   const idLecteur = auth?.personne?.id ?? null;
-  const [translation, actions, budget, total, history, photos, auteur, soutienSummary, soutiens, contributions, prolongations, decisionFinale] = await Promise.all([
+  const canReadHistory = isBusinessManager(auth?.compte?.role);
+  const [translation, actions, budget, total, history, photos, auteur, soutienSummary, soutiens, contributions, prolongations, decisionFinale, tetikasaAssocie] = await Promise.all([
     database.query(
       `SELECT traduction.libelle
       FROM statut_soso_kevitra_traduction traduction
@@ -289,6 +296,14 @@ async function getSosoDetails(row, lang, auth = null) {
       WHERE decision.id_soso_kevitra = $1`,
       [row.id],
     ),
+    database.query(
+      `SELECT tetikasa.id, statut.code AS statut
+      FROM tetikasa
+      JOIN statut_tetikasa statut ON statut.id = tetikasa.id_statut_tetikasa
+      WHERE tetikasa.id_soso_kevitra_source = $1
+        AND ($2::boolean OR statut.code = 'MISOKATRA')`,
+      [row.id, isBusinessManager(auth?.compte?.role)],
+    ),
   ]);
 
   return {
@@ -298,7 +313,7 @@ async function getSosoDetails(row, lang, auth = null) {
     budget.rows,
     total.rows[0].total,
     ),
-    verification_historique: history.rows.map((item) => ({
+    ...(canReadHistory ? { verification_historique: history.rows.map((item) => ({
       action: item.action,
       commentaire: item.commentaire,
       date_action: item.date_action,
@@ -308,7 +323,7 @@ async function getSosoDetails(row, lang, auth = null) {
         prenom: item.personne_action_prenom,
         nom_usage: item.personne_action_nom_usage,
       },
-    })),
+    })) } : {}),
     photos,
     auteur: auteur.rows[0] ?? null,
     ...consultationState(row),
@@ -316,10 +331,12 @@ async function getSosoDetails(row, lang, auth = null) {
     utilisateur_soutient: soutienSummary.rows[0].utilisateur_soutient,
     soutiens: soutiens.rows,
     contributions,
-    prolongations: prolongations.rows.map((item) => ({ id: item.id, ancienne_date_fin_consultation: item.ancienne_date_fin, nouvelle_date_fin_consultation: item.nouvelle_date_fin, raison: item.raison, date_prolongation: item.date_prolongation, personne_action: { id: item.personne_action_id, nom: item.personne_action_nom, prenom: item.personne_action_prenom, nom_usage: item.personne_action_nom_usage } })),
+    ...(canReadHistory ? { prolongations: prolongations.rows.map((item) => ({ id: item.id, ancienne_date_fin_consultation: item.ancienne_date_fin, nouvelle_date_fin_consultation: item.nouvelle_date_fin, raison: item.raison, date_prolongation: item.date_prolongation, personne_action: { id: item.personne_action_id, nom: item.personne_action_nom, prenom: item.personne_action_prenom, nom_usage: item.personne_action_nom_usage } })) } : {}),
+    tetikasa_associe: tetikasaAssocie.rows[0] ?? null,
     decision_finale: decisionFinale.rows[0]
       ? {
           decision: decisionFinale.rows[0].decision,
+          ...(canReadHistory ? {
           observation: decisionFinale.rows[0].observation,
           date_decision: decisionFinale.rows[0].date_decision,
           personne_action: {
@@ -328,6 +345,7 @@ async function getSosoDetails(row, lang, auth = null) {
             prenom: decisionFinale.rows[0].personne_action_prenom,
             nom_usage: decisionFinale.rows[0].personne_action_nom_usage,
           },
+          } : {}),
         }
       : null,
   };
@@ -396,7 +414,7 @@ async function addVerificationHistory(idSosoKevitra, action, commentaire, idPers
 }
 
 function assertAdmin(auth) {
-  if (!isAdmin(auth)) {
+  if (!isAdmin(auth) && auth?.compte?.role !== "PASTEUR") {
     throw businessError("Accès administrateur requis", "SOSO_KEVITRA_ADMIN_FORBIDDEN");
   }
 }
@@ -535,9 +553,8 @@ export async function getBrouillonSosoKevitraById(id, auth, lang = "fr") {
 }
 
 export async function getSosoKevitraById(id, auth, lang = "fr") {
-  if (!auth?.personne?.id) throw businessError("Authentification requise", "AUTH_REQUIRED");
-  const row = await getSosoRow(id);
-  if (!row || !canReadSosoKevitra(row, auth)) return null;
+  const row = await getReadableSosoKevitraRow(id, auth);
+  if (!row) return null;
   return getSosoDetails(row, normalizeLanguage(lang), auth);
 }
 

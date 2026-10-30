@@ -1,16 +1,22 @@
 import express from "express";
 import {
+  listTetikasa,
+  createTetikasa,
   getTetikasa,
   updateTetikasa,
   updateTetikasaContent,
+  transitionTetikasaController,
 } from "../controllers/tetikasa.controller.js";
 import { requireAuth } from "../middlewares/auth.middleware.js";
 import { requireRole } from "../middlewares/role.middleware.js";
 
 const router = express.Router();
 
+router.get("/", requireAuth, listTetikasa);
+router.post("/", requireAuth, requireRole("ADMIN", "PASTEUR", "BUREAU_ZANAKA_AMPIELEZANA"), createTetikasa);
 router.get("/:id", requireAuth, getTetikasa);
-router.put("/:id", requireAuth, requireRole("ADMIN", "PASTEUR"), updateTetikasa);
-router.put("/:id/contenu", requireAuth, requireRole("ADMIN", "PASTEUR"), updateTetikasaContent);
+router.put("/:id", requireAuth, requireRole("ADMIN", "PASTEUR", "BUREAU_ZANAKA_AMPIELEZANA"), updateTetikasa);
+router.put("/:id/contenu", requireAuth, requireRole("ADMIN", "PASTEUR", "BUREAU_ZANAKA_AMPIELEZANA"), updateTetikasaContent);
+router.post("/:id/transition", requireAuth, requireRole("ADMIN", "PASTEUR", "BUREAU_ZANAKA_AMPIELEZANA"), transitionTetikasaController);
 
 export default router;
