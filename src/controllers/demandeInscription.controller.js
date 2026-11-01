@@ -22,6 +22,9 @@ function invalidId(res) {
 }
 
 function handleCreateError(error, res) {
+  if (["TRACKING_UNAVAILABLE", "TRACKING_GENERATION_FAILED", "42703", "42P01"].includes(error.code)) {
+    return res.status(503).json({ success: false, code: "TRACKING_UNAVAILABLE", message: "Service temporairement indisponible." });
+  }
   if (error.code === "PERSONNE_NOT_FOUND") {
     return res.status(404).json({ success: false, message: error.message });
   }
@@ -134,6 +137,7 @@ export async function uploadPhotoTemporaireDemande(req, res) {
 }
 export async function addDemandeInscription(req, res) {
   try {
+    res.set("Cache-Control", "no-store");
     const result = await createDemandeInscription(req.body);
     return res.status(201).json({
       success: true,

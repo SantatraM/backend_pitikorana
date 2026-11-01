@@ -1,3 +1,4 @@
+import { listContributorSelection } from "../services/fandraisanAnjaraSelection.service.js";
 import {
   creerFandraisanAnjara,
   annulerFandraisanAnjara,
@@ -146,6 +147,15 @@ export async function getFandraisanAnjaraHistorique(req, res) {
   }
   try {
     const data = await getFandraisanAnjaraHistoriqueService(req.params.id, req.auth);
+    return res.json({ success: true, data });
+  } catch (error) {
+    return sendError(res, error);
+  }
+}
+
+export async function searchFandraisanAnjaraContributors(req, res) {
+  try {
+    const data = await listContributorSelection(req.query);
     return res.json({ success: true, data });
   } catch (error) {
     return sendError(res, error);

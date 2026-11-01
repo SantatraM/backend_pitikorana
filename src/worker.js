@@ -1,3 +1,4 @@
+import { databaseBindingForRequest } from "./config/demandeInformationDatabase.js";
 import { handleAsNodeRequest } from "cloudflare:node";
 import { Client } from "pg";
 import { runWithDatabaseClient } from "./config/db.js";
@@ -11,9 +12,15 @@ app.listen(port);
 
 export default {
   async fetch(request, env) {
-    const client = new Client({
-      connectionString: env.HYPERDRIVE.connectionString,
-    });
+    const pathname = new URL(request.url).pathname;
+    let binding;
+    try { binding = databaseBindingForRequest(pathname, env); }
+    catch (error) {
+      if (error.code !== "INFORMATION_DATABASE_UNAVAILABLE") throw error;
+      return Response.json({ success: false, code: "INFORMATION_UNAVAILABLE", message: "Service indisponible." },
+        { status: 503, headers: { "Cache-Control": "no-store" } });
+    }
+    const client = new Client({ connectionString: binding.connectionString });
 
     try {
       await client.connect();
@@ -23,7 +30,6 @@ export default {
       let uploadFile = null;
       let uploadFiles = [];
       let expressRequest = request;
-      const pathname = new URL(request.url).pathname;
       const isPersonPhotoUpload =
         (request.method === "POST" || request.method === "PUT") &&
         /^\/api\/photos-personne\/upload\/[^/]+$/.test(pathname);

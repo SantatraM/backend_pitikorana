@@ -1,6 +1,7 @@
 import express from "express";
 import {
   createFandraisanAnjara,
+  searchFandraisanAnjaraContributors,
   cancelFandraisanAnjara,
   getFandraisanAnjara,
   getFandraisanAnjaraNonDetermineDetail,
@@ -22,6 +23,7 @@ router.get("/statistiques", requireAuth, getFandraisanAnjaraStatistiques);
 router.get("/razambe", requireAuth, getFandraisanAnjaraParRazambe);
 router.get("/razambe/non-determine", requireAuth, getFandraisanAnjaraNonDetermineDetail);
 router.get("/razambe/:id", requireAuth, getFandraisanAnjaraRazambeDetail);
+router.get("/contributeurs/selection", requireAuth, requireBusinessAdmin, searchFandraisanAnjaraContributors);
 router.get("/:id/historique", requireAuth, requireBusinessAdmin, getFandraisanAnjaraHistorique);
 router.put("/:id", requireAuth, requireBusinessAdmin, updateFandraisanAnjara);
 router.post("/:id/annuler", requireAuth, requireBusinessAdmin, cancelFandraisanAnjara);

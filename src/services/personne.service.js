@@ -131,6 +131,104 @@ export const getAllPersonnes = async (lang = "fr") => {
   return result.rows.map(mapPersonneRow);
 };
 
+function normalizePersonnesSansComptePagination({ page, limit, recherche } = {}) {
+  const normalizedPage = page === undefined || page === "" ? 1 : Number(page);
+  const normalizedLimit = limit === undefined || limit === "" ? 10 : Number(limit);
+  const normalizedRecherche = typeof recherche === "string" ? recherche.trim() : "";
+
+  if (!Number.isInteger(normalizedPage) || normalizedPage < 1) {
+    const error = new Error("Le numéro de page est invalide");
+    error.code = "PERSONNES_SANS_COMPTE_PAGINATION_INVALID";
+    throw error;
+  }
+  if (!Number.isInteger(normalizedLimit) || ![10, 20, 50].includes(normalizedLimit)) {
+    const error = new Error("La limite doit être 10, 20 ou 50");
+    error.code = "PERSONNES_SANS_COMPTE_PAGINATION_INVALID";
+    throw error;
+  }
+  if (normalizedRecherche.length > 150) {
+    const error = new Error("La recherche ne peut pas dépasser 150 caractères");
+    error.code = "PERSONNES_SANS_COMPTE_RECHERCHE_INVALID";
+    throw error;
+  }
+
+  return { page: normalizedPage, limit: normalizedLimit, recherche: normalizedRecherche };
+}
+
+/**
+ * Liste administrative dédiée : une personne est sans compte seulement si
+ * aucun enregistrement compte_membre ne référence son identifiant.
+ */
+export async function getPersonnesSansCompte(query = {}) {
+  const { page, limit, recherche } = normalizePersonnesSansComptePagination(query);
+  const params = [];
+  const filters = [
+    `NOT EXISTS (
+      SELECT 1
+      FROM compte_membre cm
+      WHERE cm.id_personne = p.id
+    )`,
+  ];
+
+  if (recherche) {
+    params.push(`%${recherche}%`);
+    const searchParameter = `$${params.length}`;
+    filters.push(`(
+      p.nom ILIKE ${searchParameter}
+      OR COALESCE(p.prenom, '') ILIKE ${searchParameter}
+      OR COALESCE(cp.email, '') ILIKE ${searchParameter}
+      OR COALESCE(cp.telephone, '') ILIKE ${searchParameter}
+      OR COALESCE(cp.whatsapp, '') ILIKE ${searchParameter}
+    )`);
+  }
+
+  const whereClause = filters.join(" AND ");
+  const countResult = await database.query(
+    `SELECT COUNT(*)::integer AS total
+     FROM personne p
+     LEFT JOIN contacts_personne cp ON cp.id_personne = p.id
+     WHERE ${whereClause}`,
+    params,
+  );
+  const total = Number(countResult.rows[0]?.total ?? 0);
+  const offset = (page - 1) * limit;
+  const paginationParams = [...params, limit, offset];
+  const limitParameter = `$${paginationParams.length - 1}`;
+  const offsetParameter = `$${paginationParams.length}`;
+  const result = await database.query(
+    `SELECT
+       p.id AS id_personne,
+       p.nom,
+       p.prenom,
+       cp.email,
+       cp.telephone,
+       cp.whatsapp
+     FROM personne p
+     LEFT JOIN contacts_personne cp ON cp.id_personne = p.id
+     WHERE ${whereClause}
+     ORDER BY p.nom ASC, p.prenom ASC NULLS LAST, p.id ASC
+     LIMIT ${limitParameter} OFFSET ${offsetParameter}`,
+    paginationParams,
+  );
+
+  return {
+    personnes: result.rows.map((row) => ({
+      id_personne: row.id_personne,
+      nom: row.nom,
+      prenom: row.prenom ?? null,
+      email: row.email ?? null,
+      telephone: row.telephone ?? null,
+      whatsapp: row.whatsapp ?? null,
+    })),
+    pagination: {
+      page,
+      limit,
+      total,
+      total_pages: Math.ceil(total / limit),
+    },
+  };
+}
+
 export const getPersonneById = async (id, lang = "fr") => {
   const result = await database.query(
     "SELECT * FROM v_personne_langue WHERE id=$1 AND code_langue=$2",

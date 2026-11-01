@@ -1,6 +1,7 @@
 import express from "express";
 import {
   all,
+  sansCompte,
   one,
   profil,
   ascendants,
@@ -37,6 +38,7 @@ r.get("/:id/foyer-forme", requireAuth, foyerFormePreview);
 r.get("/:id/foyer-persistant", requireAuth, foyerPersistant);
 r.get("/:id/confidentialite", requireAuth, getConfidentialite);
 r.put("/:id/confidentialite", requireAuth, updateConfidentialite);
+r.get("/sans-compte", requireAuth, requireRole("ADMIN", "PASTEUR"), sansCompte);
 r.get("/:id", optionalAuth, one);
 r.get("/", optionalAuth, all);
 r.post("/complete", requireAuth, requireRole("ADMIN", "PASTEUR", "BUREAU_ZANAKA_AMPIELEZANA", "MEMBRE"), addComplete);

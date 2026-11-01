@@ -1,3 +1,4 @@
+import { inscriptionTrackingLimit } from "../middlewares/inscriptionTracking.middleware.js";
 import express from "express";
 import {
   addDemandeInscription,
@@ -21,8 +22,8 @@ export function createDemandesInscriptionRouter({
   const router = express.Router();
 
   router.post("/photo-temporaire", photoUploadMiddleware, uploadPhotoTemporaireDemande);
-  router.post("/suivi", suiviDemandeInscription);
-  router.post("/creer-compte", creerCompteMembre);
+  router.post("/suivi", inscriptionTrackingLimit, suiviDemandeInscription);
+  router.post("/creer-compte", inscriptionTrackingLimit, creerCompteMembre);
   router.get("/recherche-personne", recherchePersonneInscription);
   router.post("/:id/valider", requireAuth, requireBusinessAdmin, validerDemandeInscriptionController);
   router.post("/:id/refuser", requireAuth, requireBusinessAdmin, refuserDemandeInscriptionController);

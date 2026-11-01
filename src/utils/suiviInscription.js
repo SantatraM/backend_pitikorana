@@ -1,5 +1,6 @@
 import {
   randomBytes,
+  randomInt,
   scrypt as scryptCallback,
   timingSafeEqual,
 } from "node:crypto";
@@ -28,13 +29,17 @@ export function generateReference() {
 }
 
 export function generateCodeSuivi() {
-  const value = randomReadableChars(16);
-  return value.match(/.{1,4}/g).join("-");
+  const letters = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+  const digits = "23456789";
+  return Array.from({ length: 3 }, () => letters[randomInt(letters.length)]).join("")
+    + "-" + Array.from({ length: 5 }, () => digits[randomInt(digits.length)]).join("");
 }
 
 export function normalizeCodeSuivi(value) {
   if (typeof value !== "string") return null;
   const normalized = value.trim().toUpperCase();
+  const short = normalized.match(/^([A-HJ-NP-Z]{3})-?([2-9]{5})$/);
+  if (short) return `${short[1]}-${short[2]}`;
   return /^[A-HJ-NP-Z2-9]{4}(?:-[A-HJ-NP-Z2-9]{4}){3}$/.test(normalized)
     ? normalized
     : null;
@@ -85,3 +90,6 @@ export async function verifyCodeSuivi(codeSuivi, storedHash) {
     return false;
   }
 }
+
+// A fixed dummy verifier keeps an unknown reference on the same scrypt path.
+export const DUMMY_SUIVI_HASH = "scrypt$v1$16384$8$1$AAAAAAAAAAAAAAAAAAAAAA$" + Buffer.alloc(64).toString("base64url");

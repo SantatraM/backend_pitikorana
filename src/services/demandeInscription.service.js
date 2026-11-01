@@ -1,3 +1,4 @@
+import { insertWithUniqueTracking } from "./inscriptionTracking.service.js";
 import database from "../config/db.js";
 import Element from "../models/Element.js";
 import { createElement } from "./element.service.js";
@@ -14,9 +15,7 @@ import {
   signedTemporaryDemandePhoto,
 } from "./demandeInscriptionPhoto.service.js";
 import {
-  generateCodeSuivi,
-  generateReference,
-  hashCodeSuivi,
+  DUMMY_SUIVI_HASH,
   normalizeCodeSuivi,
   verifyCodeSuivi,
 } from "../utils/suiviInscription.js";
@@ -44,7 +43,6 @@ const RESERVED_FIELDS = new Set([
   "commentaire_admin",
   "token_suivi_hash",
 ]);
-const MAX_REFERENCE_ATTEMPTS = 5;
 const MAX_PERSONNE_SEARCH_RESULTS = 20;
 const ASSIGNABLE_ROLE_CODES = new Set(["MEMBRE", "ADMIN", "PASTEUR", "BUREAU_ZANAKA_AMPIELEZANA"]);
 const DRAFT_ROOT_FIELDS = new Set([
@@ -1067,10 +1065,6 @@ async function ensureNoPendingDuplicate(input, statusId) {
   }
 }
 
-function isReferenceCollision(error) {
-  return error.code === "23505" && error.constraint?.includes("reference");
-}
-
 function normalizeSearchQuery(value) {
   if (typeof value !== "string") {
     throw new Error("La recherche doit contenir au moins 2 caractères");
@@ -1140,55 +1134,22 @@ export async function createDemandeInscription(body) {
     const pendingStatus = await getPendingStatus();
     await ensureNoPendingDuplicate(input, pendingStatus.id);
 
-    const codeSuivi = generateCodeSuivi();
-    const tokenHash = await hashCodeSuivi(codeSuivi);
-
-    for (let attempt = 0; attempt < MAX_REFERENCE_ATTEMPTS; attempt += 1) {
-      const reference = generateReference();
-      try {
-        const result = await database.query(
-          `INSERT INTO demande_inscription (
-            id_personne,
-            email,
-            telephone,
-            reference,
-            token_suivi_hash,
-            donnees,
-            id_statut_demande,
-            id_role_attribue
-          )
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-          RETURNING id, reference, date_demande`,
-          [
-            input.id_personne,
-            input.email,
-            input.telephone,
-            reference,
-            tokenHash,
-            input.donnees,
-            pendingStatus.id,
-            null,
-          ],
-        );
-        const row = result.rows[0];
-        return {
-          demande: {
-            id: row.id,
-            reference: row.reference,
-            statut: pendingStatus.code,
-            date_demande: row.date_demande,
-          },
-          code_suivi: codeSuivi,
-        };
-      } catch (error) {
-        if (!isReferenceCollision(error)) throw error;
-      }
-    }
-
-    throw businessError(
-      "Impossible de générer une référence d'inscription unique",
-      "REFERENCE_GENERATION_FAILED",
-    );
+    const { row, code } = await insertWithUniqueTracking(async ({ reference, hash }) => {
+      const result = await database.query(
+        `INSERT INTO demande_inscription (
+          id_personne, email, telephone, reference, token_suivi_hash,
+          donnees, id_statut_demande, id_role_attribue
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+        RETURNING id, reference, date_demande`,
+        [input.id_personne, input.email, input.telephone, reference, hash,
+          input.donnees, pendingStatus.id, null],
+      );
+      return result.rows[0];
+    });
+    return {
+      demande: { id: row.id, reference: row.reference, statut: pendingStatus.code, date_demande: row.date_demande },
+      code_suivi: code,
+    };
   });
 }
 
@@ -1196,7 +1157,7 @@ export async function creerCompteMembreDepuisDemande(body) {
   const input = normalizeCreateCompteBody(body);
   const demande = await getDemandeForAccountCreation(input.reference);
 
-  if (!demande || !(await verifyCodeSuivi(input.code_suivi, demande.token_suivi_hash))) {
+  if (!(await verifyCodeSuivi(input.code_suivi, demande?.token_suivi_hash ?? DUMMY_SUIVI_HASH)) || !demande) {
     throw businessError(
       "Référence ou code de suivi invalide",
       "SUIVI_INVALID",
@@ -1379,7 +1340,7 @@ export async function getSuiviDemandeInscription(referenceValue, codeValue) {
   );
   const demande = result.rows[0];
 
-  if (!demande || !(await verifyCodeSuivi(codeSuivi, demande.token_suivi_hash))) {
+  if (!(await verifyCodeSuivi(codeSuivi, demande?.token_suivi_hash ?? DUMMY_SUIVI_HASH)) || !demande) {
     throw businessError(
       "Référence ou code de suivi invalide",
       "SUIVI_INVALID",

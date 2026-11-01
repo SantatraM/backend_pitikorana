@@ -54,6 +54,23 @@ export async function all(q, r) {
     return r.status(500).json({ success: false, message: "Erreur serveur" });
   }
 }
+export async function sansCompte(q, r) {
+  try {
+    return r.json({
+      success: true,
+      data: await s.getPersonnesSansCompte(q.query),
+    });
+  } catch (e) {
+    if (
+      e.code === "PERSONNES_SANS_COMPTE_PAGINATION_INVALID" ||
+      e.code === "PERSONNES_SANS_COMPTE_RECHERCHE_INVALID"
+    ) {
+      return r.status(400).json({ success: false, message: e.message });
+    }
+    console.error(e);
+    return r.status(500).json({ success: false, message: "Erreur serveur" });
+  }
+}
 export async function one(q, r) {
   if (!re.test(q.params.id)) return bad(r);
   try {

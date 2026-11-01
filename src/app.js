@@ -1,3 +1,5 @@
+import { isInformationRequest } from "./config/demandeInformationDatabase.js";
+import demandesInformationRoutes from "./routes/demandesInformation.routes.js";
 import express from "express";
 import cors from "cors";
 
@@ -94,7 +96,11 @@ export function createApp({ photoUploadMiddleware, requestContext = null } = {})
       credentials: true,
     }),
   );
-  app.use(express.json());
+  // The public information form has its own smaller parser, after its protections.
+  const jsonParser = express.json();
+  app.use((req, res, next) =>
+    isInformationRequest(req.path)
+      ? next() : jsonParser(req, res, next));
 
   if (requestContext) {
     app.use((req, res, next) => runWithRequestContext(requestContext, next));
@@ -158,6 +164,7 @@ export function createApp({ photoUploadMiddleware, requestContext = null } = {})
   app.use("/api/tetikasa", tetikasaRoutes);
   app.use("/api/fandraisan-anjara", fandraisanAnjaraRoutes);
   app.use("/api/foyers", foyersRoutes);
+  app.use("/api/demandes-information", demandesInformationRoutes);
 
   return app;
 }
