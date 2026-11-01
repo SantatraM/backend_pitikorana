@@ -15,3 +15,4 @@ npm-debug.log*
 .codex/
 .codex-backup-*/
 *.codex-backup-*
+/tests/
